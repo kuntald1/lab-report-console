@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MediCloud — Lab Devices</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Manrope',sans-serif; background:#f4f6fa; color:#0f1218; min-height:100vh; }
+
+/* ── Top nav ── */
+.nav { background:#fff; border-bottom:1px solid #e8ecf4; padding:.75rem 2rem; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; box-shadow:0 1px 8px rgba(15,18,24,.06); }
+.nav-logo { display:flex; align-items:center; gap:.65rem; }
+.nav-ico { width:36px; height:36px; background:linear-gradient(135deg,#f97316,#fbbf24); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.1rem; }
+.nav-title { font-size:.95rem; font-weight:800; color:#0f1218; }
+.nav-sub { font-size:.62rem; color:#8892a4; margin-top:1px; }
+.nav-right { display:flex; align-items:center; gap:1rem; }
+.sys-badge { display:flex; align-items:center; gap:.4rem; font-size:.72rem; color:#8892a4; }
+.sys-dot { width:7px; height:7px; border-radius:50%; background:#22c55e; box-shadow:0 0 6px rgba(34,197,94,.5); }
+
+/* ── Breadcrumb ── */
+.breadcrumb { padding:.6rem 2rem; font-size:.72rem; color:#8892a4; display:flex; align-items:center; gap:.4rem; }
+.breadcrumb a { color:#8892a4; text-decoration:none; }
+.breadcrumb a:hover { color:#f97316; }
+
+/* ── Main ── */
+.main { padding:0 2rem 2rem; max-width:1400px; }
+
+/* ── Page header ── */
+.page-hdr { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem; }
+.dev-count-badge { display:inline-flex; background:rgba(249,115,22,.08); border:1px solid rgba(249,115,22,.2); color:#f97316; padding:4px 12px; border-radius:100px; font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; margin-bottom:.5rem; }
+.page-title { font-size:2rem; font-weight:800; color:#0f1218; letter-spacing:-.025em; }
+.page-sub { color:#8892a4; font-size:.8rem; margin-top:.2rem; }
+.hdr-actions { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+
+/* ── Buttons ── */
+.btn-connect-all { background:linear-gradient(135deg,#f97316,#fbbf24); color:#fff; border:none; border-radius:10px; padding:.65rem 1.2rem; font-weight:700; cursor:pointer; font-size:.82rem; font-family:'Manrope',sans-serif; box-shadow:0 4px 14px rgba(249,115,22,.3); display:flex; align-items:center; gap:.4rem; transition:all .15s; }
+.btn-connect-all:hover { transform:translateY(-1px); box-shadow:0 6px 18px rgba(249,115,22,.4); }
+.btn-stop-all { background:#fff1f0; color:#dc2626; border:1px solid #fecaca; border-radius:10px; padding:.65rem 1rem; font-weight:600; cursor:pointer; font-size:.82rem; font-family:'Manrope',sans-serif; transition:background .15s; }
+.btn-stop-all:hover { background:#fee2e2; }
+.btn-add { background:#fff; color:#0f1218; border:1px solid #e8ecf4; border-radius:10px; padding:.65rem 1.2rem; font-weight:600; cursor:pointer; font-size:.82rem; font-family:'Manrope',sans-serif; transition:all .15s; }
+.btn-add:hover { border-color:#f97316; color:#f97316; }
+.btn-add.active { background:rgba(249,115,22,.06); border-color:rgba(249,115,22,.3); color:#f97316; }
+
+/* ── Add/Edit form ── */
+.form-box { background:#fff; border:1px solid rgba(249,115,22,.2); border-radius:14px; padding:1.5rem; margin-bottom:1.5rem; box-shadow:0 4px 20px rgba(249,115,22,.08); }
+.form-title { font-weight:800; color:#0f1218; margin-bottom:1rem; font-size:.95rem; display:flex; align-items:center; gap:.5rem; }
+.form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; margin-bottom:1rem; }
+.form-grid-2 { display:grid; grid-template-columns:repeat(2,1fr); gap:.8rem; margin-bottom:1rem; }
+.field-label { font-size:.67rem; color:#8892a4; font-weight:700; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.3rem; }
+.field-input { background:#fafbfc; border:1.5px solid #e8ecf4; border-radius:9px; padding:.6rem .85rem; color:#0f1218; font-family:'Manrope',sans-serif; font-size:.83rem; outline:none; width:100%; transition:border-color .15s; }
+.field-input:focus { border-color:#f97316; }
+.field-input:read-only { background:#f4f6fa; color:#8892a4; }
+.field-input option { background:#fff; }
+.form-actions { display:flex; gap:.6rem; }
+.btn-save { background:linear-gradient(135deg,#f97316,#fbbf24); color:#fff; border:none; border-radius:9px; padding:.65rem 1.4rem; font-weight:700; cursor:pointer; font-family:'Manrope',sans-serif; box-shadow:0 4px 12px rgba(249,115,22,.3); font-size:.82rem; }
+.btn-cancel { background:transparent; color:#8892a4; border:1px solid #e8ecf4; border-radius:9px; padding:.65rem 1rem; cursor:pointer; font-family:'Manrope',sans-serif; font-size:.82rem; }
+
+/* ── Device table layout ── */
+.content-grid { display:grid; grid-template-columns:1fr; gap:1.5rem; align-items:start; }
+.content-grid.with-log { grid-template-columns:1fr 360px; }
+
+/* ── Device table ── */
+.dev-table { background:#fff; border:1px solid #e8ecf4; border-radius:14px; overflow:hidden; box-shadow:0 2px 16px rgba(15,18,24,.07); }
+.tbl-header { display:grid; grid-template-columns:32px 1fr 140px 70px 90px 80px 200px; padding:.7rem 1.3rem; background:#fafbfc; border-bottom:1.5px solid #e8ecf4; }
+.tbl-col { font-size:.62rem; color:#8892a4; font-weight:700; text-transform:uppercase; letter-spacing:.07em; }
+.tbl-col.center { text-align:center; }
+.tbl-col.right { text-align:right; }
+
+/* ── Device row ── */
+.dev-row { border-bottom:1px solid #f4f6fa; transition:background .15s; }
+.dev-row:last-child { border-bottom:none; }
+.dev-row.selected { background:#fffbf7; }
+.dev-row.connected { background:#fffdf9; }
+.dev-row-inner { display:grid; grid-template-columns:32px 1fr 140px 70px 90px 80px 200px; padding:.9rem 1.3rem; align-items:center; }
+
+/* Status dot */
+.status-dot { width:9px; height:9px; border-radius:50%; transition:all .3s; }
+.status-dot.on  { background:#f97316; box-shadow:0 0 8px rgba(249,115,22,.7); }
+.status-dot.run { background:#fbbf24; }
+.status-dot.off { background:#d1d5db; }
+
+/* Device name cell */
+.dev-name-cell { display:flex; align-items:center; gap:.7rem; min-width:0; }
+.dev-type-icon { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; font-size:1.1rem; flex-shrink:0; }
+.dev-name { font-weight:700; color:#0f1218; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dev-meta { font-size:.65rem; color:#8892a4; white-space:nowrap; }
+.dev-lastlog { font-size:.62rem; font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; margin-top:.1rem; }
+
+/* IP badge */
+.ip-badge { font-family:monospace; font-size:.75rem; color:#3b82f6; background:#eff6ff; padding:.18rem .5rem; border-radius:4px; border:1px solid #dbeafe; }
+
+/* IsClient badge */
+.isclient-badge { font-size:.68rem; font-weight:700; padding:.18rem .55rem; border-radius:5px; }
+.isclient-badge.false { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
+.isclient-badge.true  { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+
+/* Results cell */
+.results-val { font-weight:800; font-size:1.1rem; }
+.results-val.has { color:#f97316; }
+.results-val.empty { color:#d1d5db; }
+.results-bc { font-size:.6rem; color:#8892a4; }
+
+/* Action buttons */
+.actions { display:flex; gap:.35rem; justify-content:flex-end; align-items:center; }
+.btn-connect    { background:linear-gradient(135deg,#f97316,#fbbf24); color:#fff; border:none; border-radius:6px; padding:.32rem .8rem; cursor:pointer; font-size:.72rem; font-weight:700; font-family:'Manrope',sans-serif; white-space:nowrap; box-shadow:0 2px 8px rgba(249,115,22,.3); transition:all .15s; }
+.btn-connect:hover { transform:translateY(-1px); }
+.btn-connect:disabled { opacity:.6; cursor:default; }
+.btn-disconnect { background:#fff1f0; color:#dc2626; border:1px solid #fecaca; border-radius:6px; padding:.32rem .8rem; cursor:pointer; font-size:.72rem; font-weight:700; font-family:'Manrope',sans-serif; white-space:nowrap; transition:background .15s; }
+.btn-disconnect:hover { background:#fee2e2; }
+.btn-logs { background:#fafbfc; color:#8892a4; border:1px solid #e8ecf4; border-radius:6px; padding:.32rem .7rem; cursor:pointer; font-size:.72rem; font-weight:600; font-family:'Manrope',sans-serif; transition:all .15s; }
+.btn-logs.active { background:rgba(249,115,22,.1); color:#f97316; border-color:rgba(249,115,22,.3); }
+.btn-edit { background:#fafbfc; color:#3b82f6; border:1px solid #dbeafe; border-radius:6px; padding:.32rem .55rem; cursor:pointer; font-size:.75rem; transition:all .15s; }
+.btn-edit:hover { background:#eff6ff; }
+.btn-del  { background:transparent; color:#dc2626; border:1px solid #fecaca; border-radius:6px; padding:.32rem .55rem; cursor:pointer; font-size:.78rem; transition:background .15s; }
+.btn-del:hover { background:#fff1f0; }
+
+/* ── Empty state ── */
+.empty-state { padding:3rem; text-align:center; color:#8892a4; }
+.empty-ico { font-size:2.5rem; margin-bottom:1rem; }
+.empty-title { font-weight:800; color:#0f1218; margin-bottom:.3rem; }
+.empty-sub { font-size:.82rem; }
+
+/* ── Log panel ── */
+.log-panel { background:#fff; border:1px solid #e8ecf4; border-radius:14px; padding:1.2rem; box-shadow:0 2px 16px rgba(15,18,24,.07); position:sticky; top:5rem; }
+.log-panel-hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:.8rem; }
+.log-dev-name { display:flex; align-items:center; gap:.5rem; font-weight:800; color:#0f1218; font-size:.9rem; }
+.log-close { background:#fafbfc; border:1px solid #e8ecf4; color:#8892a4; border-radius:6px; padding:.25rem .6rem; cursor:pointer; font-family:'Manrope',sans-serif; }
+.log-stats { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin-bottom:.8rem; }
+.log-stat { background:#fafbfc; border:1px solid #e8ecf4; border-radius:7px; padding:.45rem .7rem; }
+.log-stat-lbl { font-size:.6rem; color:#8892a4; font-weight:700; text-transform:uppercase; margin-bottom:.15rem; }
+.log-stat-val { font-weight:700; font-size:.8rem; }
+.log-body { background:#fafbfc; border:1px solid #e8ecf4; border-radius:9px; padding:.7rem; height:320px; overflow-y:auto; font-family:monospace; font-size:.7rem; }
+.log-empty { color:#8892a4; text-align:center; padding-top:4rem; line-height:1.8; }
+.log-entry { border-left:3px solid; padding:.22rem .5rem; margin-bottom:.18rem; border-radius:0 3px 3px 0; }
+.log-entry.info    { border-color:#e8ecf4;  background:transparent; color:#8892a4; }
+.log-entry.success { border-color:#16a34a; background:#f0fdf4; color:#16a34a; }
+.log-entry.error   { border-color:#dc2626; background:#fef2f2; color:#dc2626; }
+.log-entry.warn    { border-color:#d97706; background:#fffbeb; color:#d97706; }
+.log-time { color:#8892a4; margin-right:.4rem; }
+
+/* ── Confirm overlay ── */
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:300; display:none; align-items:center; justify-content:center; }
+.overlay.show { display:flex; }
+.modal { background:#fff; border-radius:14px; padding:2rem; max-width:380px; width:90%; box-shadow:0 20px 60px rgba(0,0,0,.2); }
+.modal h3 { font-size:1.1rem; font-weight:800; margin-bottom:.5rem; }
+.modal p { color:#8892a4; font-size:.82rem; margin-bottom:1.5rem; line-height:1.6; }
+.modal-actions { display:flex; gap:.75rem; justify-content:flex-end; }
+
+/* ── Toast ── */
+.toast { position:fixed; bottom:2rem; right:2rem; background:#0f1218; color:#fff; border-radius:10px; padding:.8rem 1.2rem; font-size:.78rem; z-index:500; transform:translateY(100px); opacity:0; transition:all .3s; max-width:300px; border-left:3px solid #22c55e; }
+.toast.show { transform:translateY(0); opacity:1; }
+.toast.err  { border-color:#dc2626; }
+
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:#e8ecf4; border-radius:2px; }
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<div class="nav">
+  <div class="nav-logo">
+    <div class="nav-ico">🔬</div>
+    <div>
+      <div class="nav-title">MediCloud</div>
+      <div class="nav-sub">Lab Middleware v3.0 — Local Backend</div>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="sys-badge">
+      <div class="sys-dot" id="sysDot"></div>
+      <span id="sysLabel">Checking...</span>
+    </div>
+  </div>
+</div>
+
+<!-- Breadcrumb -->
+<div class="breadcrumb">
+  <a href="#">Home</a>
+  <span>/</span>
+  <span style="color:#0f1218;font-weight:600">Devices</span>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Page header -->
+  <div class="page-hdr">
+    <div>
+      <div class="dev-count-badge" id="devCountBadge">Your Devices (0)</div>
+      <h1 class="page-title">Lab Devices</h1>
+      <p class="page-sub" id="pageSub">0 connected · 0 running · 0 total</p>
+    </div>
+    <div class="hdr-actions">
+      <button class="btn-connect-all" id="btnConnectAll" onclick="connectAll()" style="display:none">🔌 Connect All</button>
+      <button class="btn-stop-all"    id="btnStopAll"    onclick="disconnectAll()" style="display:none">⏹ Stop All</button>
+      <button class="btn-add" id="btnAdd" onclick="toggleForm()">+ Add Device</button>
+    </div>
+  </div>
+
+  <!-- Add / Edit Form -->
+  <div class="form-box" id="formBox" style="display:none">
+    <div class="form-title">
+      <span id="formTitleText">➕ Add New Device</span>
+    </div>
+    <div class="form-grid">
+      <div>
+        <label class="field-label">Quick Select</label>
+        <select class="field-input" id="fQuick" onchange="handleQuickSelect(this.value)">
+          <option value="">— Select Machine —</option>
+          <option value="erba_h560">Erba H560</option>
+          <option value="xl200">XL200</option>
+          <option value="sysmex">Sysmex XN330</option>
+          <option value="erba_ec90">Erba EC 90</option>
+          <option value="snibe">Snibe Maglumi X3</option>
+          <option value="lifotronic">Lifotronic GH-900</option>
+          <option value="em200">EM200 IP</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label">Device Name *</label>
+        <input class="field-input" id="fName" placeholder="e.g. Erba H560" />
+      </div>
+      <div>
+        <label class="field-label">Machine IP *</label>
+        <input class="field-input" id="fIp" placeholder="192.168.0.112" />
+      </div>
+      <div>
+        <label class="field-label">Port *</label>
+        <input class="field-input" id="fPort" type="number" placeholder="5600" />
+      </div>
+      <div>
+        <label class="field-label">Device Type</label>
+        <input class="field-input" id="fType" readonly />
+      </div>
+      <div>
+        <label class="field-label">Connection Mode</label>
+        <select class="field-input" id="fIsClient">
+          <option value="false">IsClient: false — MediCloud → Machine</option>
+          <option value="true">IsClient: true — Machine → MediCloud</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-save" onclick="saveDevice()">Save Device</button>
+      <button class="btn-cancel" onclick="cancelForm()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Device table + Log panel -->
+  <div class="content-grid" id="contentGrid">
+
+    <!-- Device table -->
+    <div class="dev-table">
+      <div class="tbl-header">
+        <div class="tbl-col"></div>
+        <div class="tbl-col">Device</div>
+        <div class="tbl-col center">IP</div>
+        <div class="tbl-col center">Port</div>
+        <div class="tbl-col center">IsClient</div>
+        <div class="tbl-col center">Results</div>
+        <div class="tbl-col right">Actions</div>
+      </div>
+      <div id="deviceList">
+        <div class="empty-state">
+          <div class="empty-ico">🔬</div>
+          <div class="empty-title">No Devices Yet</div>
+          <div class="empty-sub">Click "+ Add Device" to register your lab machines</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log panel (hidden by default) -->
+    <div id="logPanel" style="display:none">
+      <div class="log-panel">
+        <div class="log-panel-hdr">
+          <div class="log-dev-name">
+            <div id="logDot" class="status-dot off"></div>
+            <span id="logDevName">Device Logs</span>
+          </div>
+          <button class="log-close" onclick="closeLog()">✕</button>
+        </div>
+        <div class="log-stats">
+          <div class="log-stat"><div class="log-stat-lbl">Status</div><div class="log-stat-val" id="logStatus" style="color:#8892a4">Offline</div></div>
+          <div class="log-stat"><div class="log-stat-lbl">Results</div><div class="log-stat-val" id="logResults">0</div></div>
+          <div class="log-stat"><div class="log-stat-lbl">IP : Port</div><div class="log-stat-val" id="logIpPort" style="font-size:.72rem">—</div></div>
+          <div class="log-stat"><div class="log-stat-lbl">IsClient</div><div class="log-stat-val" id="logIsClient">—</div></div>
+        </div>
+        <div class="log-body" id="logBody">
+          <div class="log-empty">No activity yet.<br>Click <strong>Connect</strong> to start.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Confirm modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="modalTitle">Delete Device?</h3>
+    <p id="modalMsg">This action cannot be undone.</p>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:.55rem 1.2rem;cursor:pointer;font-weight:700;font-family:'Manrope',sans-serif" id="modalConfirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const BASE = 'http://localhost:8001/api';
+
+// ── Parser presets ─────────────────────────────────────────────
+const PARSERS = {
+  erba_h560:  { label:'Erba H560',         type:'Hematology',    port:5600,  ip:'192.168.0.112' },
+  xl200:      { label:'XL200',             type:'Biochemistry',  port:12377, ip:'192.168.0.112' },
+  sysmex:     { label:'Sysmex XN330',      type:'Hematology',    port:4001,  ip:'192.168.0.113' },
+  erba_ec90:  { label:'Erba EC 90',        type:'Hematology',    port:5600,  ip:'192.168.0.114' },
+  snibe:      { label:'Snibe Maglumi X3',  type:'Immunology',    port:9100,  ip:'192.168.0.115' },
+  lifotronic: { label:'Lifotronic GH-900', type:'Biochemistry',  port:7000,  ip:'192.168.0.116' },
+  em200:      { label:'EM200 IP',          type:'Urine Analyser',port:8080,  ip:'192.168.0.117' },
+};
+
+const typeIcon = t => t==='Hematology'?'🩸':t==='Biochemistry'?'🧬':t==='Urine Analyser'?'🫧':t==='Immunology'?'🛡️':'🔬';
+const typeBg   = t => t==='Hematology'?'#fff1ee':t==='Biochemistry'?'#eff6ff':t==='Urine Analyser'?'#fefce8':t==='Immunology'?'#f5f3ff':'#f0fdf4';
+const typeBrd  = t => t==='Hematology'?'#fde0d8':t==='Biochemistry'?'#dbeafe':t==='Urine Analyser'?'#fde68a':t==='Immunology'?'#ddd6fe':'#bbf7d0';
+const logColors = { info:'#8892a4', success:'#16a34a', error:'#dc2626', warn:'#d97706' };
+
+let devices = [], states = {}, selectedDevId = null, editingId = null, pollTimer = null;
+
+// ── Quick select ───────────────────────────────────────────────
+function handleQuickSelect(val) {
+  if (!val) return;
+  const p = PARSERS[val];
+  if (!p) return;
+  document.getElementById('fName').value = p.label;
+  document.getElementById('fIp').value   = p.ip;
+  document.getElementById('fPort').value = p.port;
+  document.getElementById('fType').value = p.type;
+}
+
+// ── Form toggle ────────────────────────────────────────────────
+function toggleForm() {
+  const box = document.getElementById('formBox');
+  const btn = document.getElementById('btnAdd');
+  const showing = box.style.display !== 'none';
+  if (showing) {
+    cancelForm();
+  } else {
+    editingId = null;
+    clearForm();
+    document.getElementById('formTitleText').textContent = '➕ Add New Device';
+    box.style.display = 'block';
+    btn.classList.add('active');
+    btn.textContent = '✕ Cancel';
+  }
+}
+
+function cancelForm() {
+  document.getElementById('formBox').style.display = 'none';
+  const btn = document.getElementById('btnAdd');
+  btn.classList.remove('active');
+  btn.textContent = '+ Add Device';
+  editingId = null;
+  clearForm();
+}
+
+function clearForm() {
+  document.getElementById('fQuick').value    = '';
+  document.getElementById('fName').value     = '';
+  document.getElementById('fIp').value       = '';
+  document.getElementById('fPort').value     = '';
+  document.getElementById('fType').value     = '';
+  document.getElementById('fIsClient').value = 'false';
+}
+
+function editDevice(id) {
+  const d = devices.find(x => x.id === id);
+  if (!d) return;
+  editingId = id;
+  document.getElementById('fName').value     = d.name;
+  document.getElementById('fIp').value       = d.ip_address;
+  document.getElementById('fPort').value     = d.port;
+  document.getElementById('fType').value     = d.device_type;
+  document.getElementById('fIsClient').value = d.is_client ? 'true' : 'false';
+  document.getElementById('formTitleText').textContent = `✏️ Edit — ${d.name}`;
+  document.getElementById('formBox').style.display = 'block';
+  document.getElementById('btnAdd').classList.add('active');
+  document.getElementById('btnAdd').textContent = '✕ Cancel';
+  document.getElementById('formBox').scrollIntoView({ behavior:'smooth' });
+}
+
+// ── Save (create or update) ────────────────────────────────────
+async function saveDevice() {
+  const name = document.getElementById('fName').value.trim();
+  const ip   = document.getElementById('fIp').value.trim();
+  const port = parseInt(document.getElementById('fPort').value);
+  if (!name || !ip || !port) { showToast('Name, IP and Port are required', 'err'); return; }
+
+  const payload = {
+    name,
+    ip_address:   ip,
+    port,
+    device_type:  document.getElementById('fType').value || 'Hematology',
+    parser:       document.getElementById('fQuick').value || 'astm',
+    protocol:     'ASTM',
+    is_client:    document.getElementById('fIsClient').value === 'true',
+    bidirectional: true,
+  };
+
+  try {
+    let r;
+    if (editingId) {
+      r = await fetch(`${BASE}/devices/${editingId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+      showToast(`✅ ${name} updated!`);
+    } else {
+      r = await fetch(`${BASE}/devices`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+      showToast(`✅ ${name} registered!`);
+    }
+    if (!r.ok) throw new Error(await r.text());
+    cancelForm();
+    await load();
+  } catch(e) {
+    showToast('Save failed: ' + e.message, 'err');
+  }
+}
+
+// ── Delete ─────────────────────────────────────────────────────
+function confirmDelete(id) {
+  const d = devices.find(x => x.id === id);
+  if (!d) return;
+  document.getElementById('modalTitle').textContent = `Delete "${d.name}"?`;
+  document.getElementById('modalMsg').textContent   = `This will permanently remove ${d.name} from the database. If connected, it will be disconnected first.`;
+  document.getElementById('modalConfirm').onclick   = async () => {
+    closeModal();
+    try {
+      await fetch(`${BASE}/tcp/disconnect/${id}`, { method:'POST' });
+      await fetch(`${BASE}/devices/${id}`, { method:'DELETE' });
+      if (selectedDevId === id) closeLog();
+      showToast('🗑️ Device deleted');
+      await load();
+    } catch(e) { showToast('Delete failed', 'err'); }
+  };
+  document.getElementById('overlay').classList.add('show');
+}
+
+function closeModal() { document.getElementById('overlay').classList.remove('show'); }
+
+// ── Connect / Disconnect ───────────────────────────────────────
+async function connectOne(id) {
+  const btn = document.getElementById(`btn-connect-${id}`);
+  if (btn) { btn.textContent = '...'; btn.disabled = true; }
+  try {
+    await fetch(`${BASE}/tcp/connect/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{"retry_interval":10}' });
+    showToast('🔌 Connecting...');
+  } catch(e) { showToast('Failed to connect', 'err'); }
+  setTimeout(() => { if(btn){btn.disabled=false;} load(); }, 800);
+}
+
+async function disconnectOne(id) {
+  try {
+    await fetch(`${BASE}/tcp/disconnect/${id}`, { method:'POST' });
+    showToast('⏹ Disconnected');
+    await load();
+  } catch(e) { showToast('Failed', 'err'); }
+}
+
+async function connectAll() {
+  try {
+    await fetch(`${BASE}/tcp/connect-all`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{"retry_interval":10}' });
+    showToast('🔌 Connecting all devices...');
+  } catch(e) { showToast('Backend not reachable', 'err'); }
+}
+
+async function disconnectAll() {
+  try {
+    await fetch(`${BASE}/tcp/disconnect-all`, { method:'POST' });
+    showToast('⏹ All devices stopped');
+    await load();
+  } catch(e) { showToast('Failed', 'err'); }
+}
+
+// ── Log panel ──────────────────────────────────────────────────
+function openLog(id) {
+  selectedDevId = id;
+  document.getElementById('logPanel').style.display = 'block';
+  document.getElementById('contentGrid').classList.add('with-log');
+  renderLog();
+}
+
+function closeLog() {
+  selectedDevId = null;
+  document.getElementById('logPanel').style.display = 'none';
+  document.getElementById('contentGrid').classList.remove('with-log');
+}
+
+function renderLog() {
+  if (selectedDevId === null) return;
+  const d  = devices.find(x => x.id === selectedDevId);
+  const st = states[selectedDevId] || {};
+  if (!d) return;
+
+  const isOn  = d.tcp_connected || st.connected;
+  const isRun = d.tcp_running   || st.running;
+
+  document.getElementById('logDevName').textContent  = d.name;
+  document.getElementById('logDot').className        = `status-dot ${isOn?'on':isRun?'run':'off'}`;
+  const statusText = isOn ? '🟢 Connected!' : isRun ? (d.is_client ? '🟡 Waiting for machine...' : '🟡 Connecting...') : '⚫ Offline';
+  const statusColor = isOn ? '#16a34a' : isRun ? '#d97706' : '#8892a4';
+  document.getElementById('logStatus').textContent   = statusText;
+  document.getElementById('logStatus').style.color   = statusColor;
+  document.getElementById('logResults').textContent  = d.total_results || st.total || 0;
+  document.getElementById('logIpPort').textContent   = `${d.ip_address}:${d.port}`;
+  document.getElementById('logIsClient').textContent = d.is_client ? 'true' : 'false';
+  document.getElementById('logIsClient').style.color = d.is_client ? '#16a34a' : '#1d4ed8';
+
+  const logs   = st.logs || [];
+  const logBody = document.getElementById('logBody');
+  const wasAtBottom = logBody.scrollHeight - logBody.scrollTop <= logBody.clientHeight + 30;
+
+  if (logs.length === 0) {
+    logBody.innerHTML = '<div class="log-empty">No activity yet.<br>Click <strong>Connect</strong> to start.</div>';
+    return;
+  }
+
+  logBody.innerHTML = logs.map(l => `
+    <div class="log-entry ${l.level||'info'}">
+      <span class="log-time">[${l.time}]</span>
+      <span>${l.msg}</span>
+    </div>`).join('');
+
+  if (wasAtBottom) logBody.scrollTop = logBody.scrollHeight;
+}
+
+// ── Render device list ─────────────────────────────────────────
+function render() {
+  const list  = document.getElementById('deviceList');
+  const count = devices.length;
+  const onC   = devices.filter(d => d.tcp_connected || (states[d.id]||{}).connected).length;
+  const onR   = devices.filter(d => d.tcp_running   || (states[d.id]||{}).running).length;
+
+  document.getElementById('devCountBadge').textContent = `Your Devices (${count})`;
+  document.getElementById('pageSub').textContent       = `${onC} connected · ${onR} running · ${count} total`;
+  document.getElementById('btnConnectAll').style.display = count > 0 ? '' : 'none';
+  document.getElementById('btnStopAll').style.display    = count > 0 ? '' : 'none';
+
+  if (count === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-ico">🔬</div><div class="empty-title">No Devices Yet</div><div class="empty-sub">Click "+ Add Device" to register your lab machines</div></div>`;
+    return;
+  }
+
+  list.innerHTML = devices.map(d => {
+    const st    = states[d.id] || {};
+    const isOn  = d.tcp_connected || st.connected;
+    const isRun = d.tcp_running   || st.running;
+    const isSel = selectedDevId === d.id;
+    const logs  = st.logs || [];
+    const last  = logs[logs.length - 1];
+    const total = d.total_results || st.total || 0;
+    const dotCls = isOn ? 'on' : isRun ? 'run' : 'off';
+
+    return `
+      <div class="dev-row ${isSel?'selected':''} ${isOn?'connected':''}" id="row-${d.id}">
+        <div class="dev-row-inner">
+          <div style="display:flex;justify-content:center">
+            <div class="status-dot ${dotCls}"></div>
+          </div>
+          <div class="dev-name-cell">
+            <div class="dev-type-icon" style="background:${typeBg(d.device_type)};border:1.5px solid ${typeBrd(d.device_type)}">${typeIcon(d.device_type)}</div>
+            <div style="min-width:0">
+              <div class="dev-name">${d.name}</div>
+              <div class="dev-meta">${d.device_type} · ${d.parser||'—'}</div>
+              ${isOn ? `<div class="dev-lastlog" style="color:#16a34a;font-weight:700">🟢 Connection established — receiving data</div>` : last ? `<div class="dev-lastlog" style="color:${logColors[last.level]||'#8892a4'}">${last.msg}</div>` : ''}
+            </div>
+          </div>
+          <div style="text-align:center">
+            <span class="ip-badge">${d.ip_address||'—'}</span>
+          </div>
+          <div style="text-align:center;font-family:monospace;font-weight:700;font-size:.82rem">${d.port||'—'}</div>
+          <div style="text-align:center">
+            <span class="isclient-badge ${d.is_client?'true':'false'}">${d.is_client?'true':'false'}</span>
+          </div>
+          <div style="text-align:center">
+            <div class="results-val ${total>0?'has':'empty'}">${total}</div>
+            ${d.last_barcode||st.last_barcode ? `<div class="results-bc">${d.last_barcode||st.last_barcode}</div>` : ''}
+          </div>
+          <div class="actions">
+            ${!isRun
+              ? `<button class="btn-connect" id="btn-connect-${d.id}" onclick="connectOne(${d.id})">Connect</button>`
+              : `<button class="btn-disconnect" onclick="disconnectOne(${d.id})">Disconnect</button>`
+            }
+            <button class="btn-logs ${isSel?'active':''}" onclick="${isSel?'closeLog()':'openLog('+d.id+')'}">Logs</button>
+            <button class="btn-edit" onclick="editDevice(${d.id})" title="Edit">✏️</button>
+            <button class="btn-del"  onclick="confirmDelete(${d.id})" title="Delete">✕</button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  renderLog();
+}
+
+// ── Load data ──────────────────────────────────────────────────
+async function load() {
+  try {
+    const [devRes, stateRes] = await Promise.all([
+      fetch(`${BASE}/devices`),
+      fetch(`${BASE}/tcp/states`),
+    ]);
+    devices = await devRes.json();
+    states  = await stateRes.json();
+
+    // Update system badge
+    document.getElementById('sysDot').style.background   = '#22c55e';
+    document.getElementById('sysDot').style.boxShadow    = '0 0 6px rgba(34,197,94,.5)';
+    document.getElementById('sysLabel').textContent      = 'System Online';
+    document.getElementById('sysLabel').style.color      = '#22c55e';
+  } catch(e) {
+    document.getElementById('sysDot').style.background  = '#dc2626';
+    document.getElementById('sysDot').style.boxShadow   = 'none';
+    document.getElementById('sysLabel').textContent     = 'Backend Offline — run start.bat';
+    document.getElementById('sysLabel').style.color     = '#dc2626';
+  }
+  render();
+}
+
+// ── Toast ──────────────────────────────────────────────────────
+function showToast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent  = msg;
+  t.className    = `toast ${type==='err'?'err':''} show`;
+  t.style.borderLeftColor = type==='err' ? '#dc2626' : '#22c55e';
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+// ── Start ──────────────────────────────────────────────────────
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

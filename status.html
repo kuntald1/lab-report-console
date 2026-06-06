@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MediCloud — System Status</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Manrope',sans-serif; background:#f4f6fa; color:#0f1218; min-height:100vh; }
+
+.nav { background:#fff; border-bottom:1px solid #e8ecf4; padding:.75rem 2rem; display:flex; align-items:center; justify-content:space-between; box-shadow:0 1px 8px rgba(15,18,24,.06); }
+.logo { display:flex; align-items:center; gap:.65rem; }
+.logo-ico { width:36px; height:36px; background:linear-gradient(135deg,#f97316,#fbbf24); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.1rem; }
+.logo-title { font-size:.95rem; font-weight:800; }
+.logo-sub { font-size:.62rem; color:#8892a4; margin-top:1px; }
+.nav-link { background:linear-gradient(135deg,#f97316,#fbbf24); color:#fff; border:none; border-radius:8px; padding:.45rem 1rem; font-weight:700; cursor:pointer; font-size:.78rem; font-family:'Manrope',sans-serif; text-decoration:none; }
+
+.file-warn { background:#fef2f2; border-bottom:2px solid #dc2626; padding:1rem 2rem; text-align:center; display:none; }
+.file-warn.show { display:block; }
+.file-warn-title { font-weight:800; color:#dc2626; font-size:.9rem; margin-bottom:.3rem; }
+.file-warn-sub { font-size:.75rem; color:#7f1d1d; line-height:1.7; }
+.file-warn-cmd { display:inline-block; background:#fff; border:1px solid #fecaca; border-radius:6px; padding:.3rem .85rem; font-family:'JetBrains Mono',monospace; font-size:.78rem; color:#dc2626; margin-top:.4rem; }
+
+.main { padding:2rem; max-width:960px; margin:0 auto; }
+
+/* ── Status hero ── */
+.status-card { background:#fff; border-radius:16px; border:1px solid #e8ecf4; padding:1.75rem; margin-bottom:1.5rem; display:flex; align-items:center; gap:1.5rem; box-shadow:0 2px 16px rgba(15,18,24,.07); position:relative; overflow:hidden; }
+.status-card::before { content:''; position:absolute; top:0; left:0; right:0; height:4px; }
+.status-card.online::before  { background:linear-gradient(90deg,#f97316,#fbbf24,#22c55e); }
+.status-card.offline::before { background:#dc2626; }
+.status-card.checking::before{ background:#f97316; animation:shimmer 1.5s infinite; }
+@keyframes shimmer{0%,100%{opacity:1}50%{opacity:.4}}
+.status-icon { width:68px; height:68px; border-radius:18px; display:flex; align-items:center; justify-content:center; font-size:1.9rem; flex-shrink:0; }
+.status-icon.online  { background:#fff7ed; border:2px solid #fed7aa; }
+.status-icon.offline { background:#fef2f2; border:2px solid #fecaca; }
+.status-icon.checking{ background:#fff7ed; border:2px solid #fed7aa; }
+.status-text { flex:1; }
+.status-title { font-size:1.5rem; font-weight:800; letter-spacing:-.02em; line-height:1.1; }
+.status-title.online  { color:#0f1218; }
+.status-title.offline { color:#dc2626; }
+.status-title.checking{ color:#f97316; }
+.status-sub { font-size:.8rem; color:#8892a4; margin-top:.25rem; }
+.status-time { text-align:right; flex-shrink:0; }
+.time-val { font-family:'JetBrains Mono',monospace; font-size:.78rem; color:#0f1218; font-weight:600; }
+.time-lbl { font-size:.6rem; color:#8892a4; margin-top:.15rem; }
+.check-n { font-family:'JetBrains Mono',monospace; font-size:.65rem; color:#8892a4; margin-top:.4rem; }
+
+/* ── Stats ── */
+.stats { display:grid; grid-template-columns:repeat(5,1fr); gap:.85rem; margin-bottom:1.5rem; }
+.stat { background:#fff; border-radius:12px; border:1px solid #e8ecf4; padding:.9rem 1rem; box-shadow:0 2px 8px rgba(15,18,24,.04); position:relative; overflow:hidden; }
+.stat::after { content:''; position:absolute; bottom:0; left:0; right:0; height:3px; }
+.stat.c1::after { background:linear-gradient(90deg,#f97316,#fbbf24); }
+.stat.c2::after { background:#22c55e; }
+.stat.c3::after { background:#16a34a; }
+.stat.c4::after { background:#d97706; }
+.stat.c5::after { background:#dc2626; }
+.stat-ico { font-size:1.1rem; margin-bottom:.4rem; }
+.stat-val { font-size:1.7rem; font-weight:800; letter-spacing:-.03em; line-height:1; }
+.stat-val.ok  { color:#16a34a; }
+.stat-val.warn{ color:#d97706; }
+.stat-val.err { color:#dc2626; }
+.stat-lbl { font-size:.58rem; color:#8892a4; text-transform:uppercase; letter-spacing:.07em; margin-top:.2rem; font-weight:700; }
+
+/* ── Health checks ── */
+.card { background:#fff; border-radius:16px; border:1px solid #e8ecf4; overflow:hidden; margin-bottom:1.5rem; box-shadow:0 2px 16px rgba(15,18,24,.07); }
+.card-title { padding:.9rem 1.4rem; border-bottom:1px solid #f4f6fa; font-weight:800; font-size:.85rem; display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+.check-row { display:flex; align-items:center; gap:1rem; padding:.85rem 1.4rem; border-bottom:1px solid #f4f6fa; transition:background .15s; }
+.check-row:last-child { border-bottom:none; }
+.check-row:hover { background:#fafbfc; }
+.chk-ico { width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:.95rem; flex-shrink:0; }
+.chk-ico.ok      { background:#f0fdf4; }
+.chk-ico.fail    { background:#fef2f2; }
+.chk-ico.warn    { background:#fffbeb; }
+.chk-ico.loading { background:#fff7ed; animation:spin 1s linear infinite; }
+@keyframes spin{to{transform:rotate(360deg)}}
+.chk-body { flex:1; }
+.chk-name { font-weight:700; font-size:.82rem; }
+.chk-detail { font-family:'JetBrains Mono',monospace; font-size:.62rem; color:#8892a4; margin-top:.15rem; }
+.chk-badge { font-family:'JetBrains Mono',monospace; font-size:.65rem; font-weight:700; padding:.2rem .6rem; border-radius:6px; white-space:nowrap; }
+.chk-badge.ok   { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+.chk-badge.fail { background:#fef2f2; color:#dc2626; border:1px solid #fecaca; }
+.chk-badge.warn { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
+.chk-badge.wait { background:#f4f6fa; color:#8892a4; border:1px solid #e8ecf4; }
+
+/* ── Scan log table ── */
+.scan-table { width:100%; border-collapse:collapse; }
+.scan-table th { font-size:.6rem; color:#8892a4; font-weight:700; text-transform:uppercase; letter-spacing:.07em; padding:.65rem 1rem; border-bottom:1.5px solid #e8ecf4; text-align:left; background:#fafbfc; }
+.scan-table td { padding:.7rem 1rem; border-bottom:1px solid #f4f6fa; font-size:.78rem; vertical-align:middle; }
+.scan-table tr:last-child td { border-bottom:none; }
+.scan-table tr:hover td { background:#fafbfc; }
+.scan-status { display:inline-flex; align-items:center; gap:.3rem; font-size:.68rem; font-weight:700; padding:.2rem .6rem; border-radius:5px; white-space:nowrap; }
+.scan-status.success { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+.scan-status.unknown { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
+.scan-status.error   { background:#fef2f2; color:#dc2626; border:1px solid #fecaca; }
+.barcode-val { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:.78rem; color:#0f1218; }
+.scan-empty { padding:2.5rem; text-align:center; color:#8892a4; font-size:.82rem; }
+.scan-empty-ico { font-size:2rem; margin-bottom:.5rem; opacity:.4; }
+
+/* ── LAN IP card ── */
+.lan-body { padding:1.25rem 1.4rem; }
+.lan-ip-big { font-family:'JetBrains Mono',monospace; font-size:1.5rem; font-weight:700; color:#f97316; margin-bottom:.3rem; }
+.lan-sub { font-size:.72rem; color:#8892a4; margin-bottom:1rem; line-height:1.6; }
+.url-row { background:#fafbfc; border:1px solid #e8ecf4; border-radius:9px; padding:.7rem 1rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:.5rem; }
+.url-lbl { font-size:.6rem; color:#8892a4; font-weight:700; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.18rem; }
+.url-val { font-family:'JetBrains Mono',monospace; font-size:.76rem; color:#0f1218; font-weight:600; }
+.btn-copy { background:#fff; border:1px solid #e8ecf4; color:#8892a4; border-radius:7px; padding:.28rem .7rem; cursor:pointer; font-family:'Manrope',sans-serif; font-size:.7rem; font-weight:600; transition:all .15s; white-space:nowrap; }
+.btn-copy:hover { border-color:#f97316; color:#f97316; }
+.btn-copy.copied { background:#f0fdf4; border-color:#bbf7d0; color:#16a34a; }
+
+.toast { position:fixed; bottom:2rem; right:2rem; background:#0f1218; color:#fff; border-radius:10px; padding:.75rem 1.2rem; font-size:.75rem; z-index:500; transform:translateY(100px); opacity:0; transition:all .3s; border-left:3px solid #22c55e; }
+.toast.show { transform:translateY(0); opacity:1; }
+</style>
+</head>
+<body>
+
+<div class="file-warn" id="fileWarn">
+  <div class="file-warn-title">⚠️ Opened as a file — not connected to backend</div>
+  <div class="file-warn-sub">Run <strong>start.bat</strong> first, then open: </div>
+  <div class="file-warn-cmd">http://localhost:8001/status</div>
+</div>
+
+<div class="nav">
+  <div class="logo">
+    <div class="logo-ico">🔬</div>
+    <div>
+      <div class="logo-title">MediCloud</div>
+      <div class="logo-sub">Local Backend — System Status</div>
+    </div>
+  </div>
+  <a href="http://localhost:8001/devices" class="nav-link">🔬 Go to Devices →</a>
+</div>
+
+<div class="main">
+
+  <!-- Status hero -->
+  <div class="status-card checking" id="statusCard">
+    <div class="status-icon checking" id="statusIcon">⏳</div>
+    <div class="status-text">
+      <div class="status-title checking" id="statusTitle">Checking backend...</div>
+      <div class="status-sub" id="statusSub">Trying to connect to http://localhost:8001</div>
+    </div>
+    <div class="status-time">
+      <div class="time-val" id="timeVal">--:--:--</div>
+      <div class="time-lbl">Last checked</div>
+      <div class="check-n" id="checkN">Checks: 0</div>
+    </div>
+  </div>
+
+  <!-- Today's scan counters — the important numbers -->
+  <div class="stats">
+    <div class="stat c1">
+      <div class="stat-ico">🔌</div>
+      <div class="stat-val" id="s-devices">—</div>
+      <div class="stat-lbl">Devices Connected</div>
+    </div>
+    <div class="stat c2">
+      <div class="stat-ico">📥</div>
+      <div class="stat-val ok" id="s-success">—</div>
+      <div class="stat-lbl">✅ Success Today</div>
+    </div>
+    <div class="stat c3">
+      <div class="stat-ico">⚠️</div>
+      <div class="stat-val warn" id="s-unknown">—</div>
+      <div class="stat-lbl">⚠️ Unknown Barcode</div>
+    </div>
+    <div class="stat c4">
+      <div class="stat-ico">❌</div>
+      <div class="stat-val err" id="s-errors">—</div>
+      <div class="stat-lbl">❌ Errors Today</div>
+    </div>
+    <div class="stat c5">
+      <div class="stat-ico">🔢</div>
+      <div class="stat-val" id="s-total">—</div>
+      <div class="stat-lbl">Total Scans Today</div>
+    </div>
+  </div>
+
+  <!-- Health checks -->
+  <div class="card">
+    <div class="card-title">🔍 Health Checks</div>
+    <div class="check-row"><div class="chk-ico loading" id="i1">↻</div><div class="chk-body"><div class="chk-name">Backend Server</div><div class="chk-detail">Is start.bat running? Port 8001 open?</div></div><div class="chk-badge wait" id="b1">Checking...</div></div>
+    <div class="check-row"><div class="chk-ico loading" id="i2">↻</div><div class="chk-body"><div class="chk-name">Database Connection</div><div class="chk-detail">PostgreSQL · 187.127.150.252:5433</div></div><div class="chk-badge wait" id="b2">Checking...</div></div>
+    <div class="check-row"><div class="chk-ico loading" id="i3">↻</div><div class="chk-body"><div class="chk-name">Devices Registered</div><div class="chk-detail" id="d3">How many machines in database</div></div><div class="chk-badge wait" id="b3">Checking...</div></div>
+    <div class="check-row"><div class="chk-ico loading" id="i4">↻</div><div class="chk-body"><div class="chk-name">TCP Connections</div><div class="chk-detail" id="d4">Machine connection threads</div></div><div class="chk-badge wait" id="b4">Checking...</div></div>
+    <div class="check-row"><div class="chk-ico loading" id="i5">↻</div><div class="chk-body"><div class="chk-name">Internet / Cloud DB Reach</div><div class="chk-detail">Can reach remote PostgreSQL?</div></div><div class="chk-badge wait" id="b5">Checking...</div></div>
+  </div>
+
+  <!-- Scan Log -->
+  <div class="card">
+    <div class="card-title">
+      <span>⚠️ Problems Only — Unknown Barcodes &amp; Errors Today</span>
+      <span style="font-size:.7rem;font-weight:400;color:#8892a4">Auto-refresh every 3s</span>
+    </div>
+    <div id="scanTableWrap">
+      <div class="scan-empty"><div class="scan-empty-ico">📋</div>No scans yet today. Connect devices and run samples.</div>
+    </div>
+  </div>
+
+
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+if (window.location.protocol === 'file:') {
+  document.getElementById('fileWarn').classList.add('show');
+}
+
+const BASE = 'http://localhost:8001';
+let checkN = 0, backendWasUp = false;
+
+function setCheck(n, state, detail, badge) {
+  const ico = document.getElementById('i' + n);
+  const b   = document.getElementById('b' + n);
+  const d   = document.getElementById('d' + n);
+  const icons = { ok:'✅', fail:'❌', warn:'⚠️', loading:'↻' };
+  ico.textContent = icons[state] || '↻';
+  ico.className   = `chk-ico ${state}`;
+  b.textContent   = badge;
+  b.className     = `chk-badge ${state === 'loading' ? 'wait' : state}`;
+  if (d && detail) d.textContent = detail;
+}
+
+function setStatus(state, title, sub) {
+  document.getElementById('statusCard').className  = `status-card ${state}`;
+  document.getElementById('statusIcon').className  = `status-icon ${state}`;
+  document.getElementById('statusIcon').textContent = state==='online'?'✅':state==='offline'?'❌':'⏳';
+  document.getElementById('statusTitle').className = `status-title ${state}`;
+  document.getElementById('statusTitle').textContent = title;
+  document.getElementById('statusSub').textContent   = sub;
+}
+
+function renderScanTable(scans) {
+  const wrap = document.getElementById('scanTableWrap');
+  // Only show problems — unknown barcode and errors. Saved results visible on medicloud.mooo.com
+  const problems = (scans || []).filter(s => s.status === 'unknown' || s.status === 'error');
+  if (problems.length === 0) {
+    wrap.innerHTML = '<div class="scan-empty"><div class="scan-empty-ico">✅</div>No problems today.<br>All barcodes matched. Saved results are on medicloud.mooo.com</div>';
+    return;
+  }
+  const rows = problems.map(s => {
+    const statusHtml = {
+      unknown: '<span class="scan-status unknown">⚠️ Unknown Barcode</span>',
+      error:   '<span class="scan-status error">❌ Error</span>',
+    }[s.status] || s.status;
+
+    const rowBg = s.status === 'unknown' ? 'background:#fffbeb' : 'background:#fef2f2';
+
+    const whatToDo = s.status === 'unknown'
+      ? `Register patient <strong>${s.barcode}</strong> on medicloud.mooo.com`
+      : `Check LIS settings on <strong>${s.device_name}</strong>`;
+
+    return `<tr style="${rowBg}">
+      <td style="padding:.75rem 1rem;color:#8892a4;font-family:'JetBrains Mono',monospace;font-size:.65rem">${s.time}</td>
+      <td style="padding:.75rem 1rem"><span class="barcode-val">${s.barcode}</span></td>
+      <td style="padding:.75rem 1rem">${statusHtml}</td>
+      <td style="padding:.75rem 1rem;font-size:.72rem;color:#8892a4;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.detail}">${s.detail}</td>
+      <td style="padding:.75rem 1rem;font-size:.72rem;color:#8892a4">${s.device_name}</td>
+      <td style="padding:.75rem 1rem;font-size:.68rem;color:#0f1218;font-weight:600">${whatToDo}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<div style="overflow-x:auto"><table class="scan-table">
+    <thead><tr>
+      <th>Time</th><th>Barcode</th><th>Status</th><th>What happened</th><th>Device</th><th>What to do</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+async function detectIP() {
+  try {
+    const r = await fetch(`${BASE}/info`, { signal: AbortSignal.timeout(3000) });
+    const d = await r.json();
+    const ip = d.primary_ip || 'localhost';
+    const port = d.port || 8001;
+    document.getElementById('lanIpBig').textContent = `${ip}:${port}`;
+    document.getElementById('apiUrl').textContent   = `http://${ip}:${port}/api`;
+    document.getElementById('devUrl').textContent   = `http://${ip}:${port}/devices`;
+  } catch(e) {}
+}
+
+function copyText(elId, btn) {
+  navigator.clipboard.writeText(document.getElementById(elId).textContent).then(() => {
+    btn.textContent = '✓ Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+async function poll() {
+  checkN++;
+  document.getElementById('timeVal').textContent = new Date().toLocaleTimeString('en-IN');
+  document.getElementById('checkN').textContent  = `Checks: ${checkN}`;
+
+  // 1. Backend alive
+  try {
+    const r = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    if (!r.ok) throw new Error();
+    setCheck(1, 'ok', null, '✅ Running');
+    if (!backendWasUp) {
+      setStatus('online', 'Backend is Running', 'All systems online — ready to connect lab machines');
+      detectIP();
+      backendWasUp = true;
+    }
+  } catch(e) {
+    setCheck(1, 'fail', null, '❌ Offline');
+    setStatus('offline', 'Backend is Offline', 'Run start.bat to start the backend server');
+    [2,3,4,5].forEach(n => setCheck(n, 'warn', null, '— Unknown'));
+    ['s-devices','s-success','s-unknown','s-errors','s-total'].forEach(id => {
+      document.getElementById(id).textContent = '—';
+    });
+    backendWasUp = false;
+    return;
+  }
+
+  // 2. Database
+  try {
+    const r = await fetch(`${BASE}/`, { signal: AbortSignal.timeout(3000) });
+    const d = await r.json();
+    setCheck(2, d.status==='ok'?'ok':'fail', null, d.status==='ok'?'✅ Connected':'❌ Failed');
+  } catch(e) { setCheck(2, 'fail', null, '❌ Not Connected'); }
+
+  // 3. Devices
+  let devices = [];
+  try {
+    const r = await fetch(`${BASE}/api/devices`, { signal: AbortSignal.timeout(3000) });
+    devices = await r.json();
+    const connected = devices.filter(d => d.tcp_connected).length;
+    document.getElementById('s-devices').textContent = connected;
+    setCheck(3, devices.length > 0 ? 'ok' : 'warn',
+      `${devices.length} registered · ${connected} connected right now`,
+      devices.length > 0 ? `✅ ${devices.length} devices` : '⚠️ No devices');
+  } catch(e) { setCheck(3, 'fail', null, '❌ Error'); }
+
+  // 4. TCP states
+  try {
+    const r = await fetch(`${BASE}/api/tcp/states`, { signal: AbortSignal.timeout(3000) });
+    const states = await r.json();
+    const running   = Object.values(states).filter(s => s.running).length;
+    const connected = Object.values(states).filter(s => s.connected).length;
+    setCheck(4,
+      connected > 0 ? 'ok' : running > 0 ? 'warn' : 'ok',
+      `${running} threads running · ${connected} machines live`,
+      connected > 0 ? `✅ ${connected} connected` : running > 0 ? `⚠️ ${running} connecting...` : '✅ Ready');
+  } catch(e) { setCheck(4, 'fail', null, '❌ Error'); }
+
+  // 5. Scan summary + log
+  try {
+    const r = await fetch(`${BASE}/api/tcp/scans/summary`, { signal: AbortSignal.timeout(3000) });
+    const summary = await r.json();
+
+    document.getElementById('s-success').textContent = summary.success || 0;
+    document.getElementById('s-unknown').textContent = summary.unknown || 0;
+    document.getElementById('s-errors').textContent  = summary.error   || 0;
+    document.getElementById('s-total').textContent   = summary.total   || 0;
+
+    const problems = summary.unknown + summary.error;
+    const state = summary.error > 0 ? 'warn' : summary.unknown > 0 ? 'warn' : 'ok';
+    const msg   = summary.total === 0
+      ? 'No scans yet today'
+      : `${summary.success} saved · ${summary.unknown} unknown barcode · ${summary.error} errors`;
+    setCheck(5, state, msg,
+      problems > 0 ? `⚠️ ${problems} problem(s)` : '✅ All Good');
+
+    renderScanTable(summary.scans || []);
+  } catch(e) {
+    setCheck(5, 'fail', null, '❌ No Internet / Error');
+  }
+}
+
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

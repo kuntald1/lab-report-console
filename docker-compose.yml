@@ -1,0 +1,41 @@
+# ============================================================
+#  MediCloud Local Backend — Docker Compose
+#  Run with: docker-compose up -d
+#  Stop with: docker-compose down
+#  Logs with: docker-compose logs -f
+# ============================================================
+
+services:
+  medicloud-backend:
+    build: .
+    container_name: medicloud_local_backend
+
+    # ── Auto restart ──────────────────────────────────────────
+    restart: always
+
+    # ── Port mapping ──────────────────────────────────────────
+    ports:
+      - "8001:8001"
+      - "6100:6100"
+      - "6001:5001"
+      - "6002:5002"
+      - "6003:5003"
+      - "6004:5004"
+      - "6005:5005"
+      - "6006:5006"
+
+    # ── Environment variables ─────────────────────────────────
+    env_file:
+      - .env
+
+    # ── Volume ───────────────────────────────────────────────
+    volumes:
+      - .:/app
+
+    # ── Health check ─────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

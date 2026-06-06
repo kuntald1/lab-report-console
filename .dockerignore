@@ -1,0 +1,15 @@
+# Don't copy these into Docker image
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+*.log
+.env.example
+README.md
+install.bat
+start.bat
+start.sh
