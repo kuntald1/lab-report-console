@@ -208,7 +208,7 @@ if (window.location.protocol === 'file:') {
   document.getElementById('fileWarn').classList.add('show');
 }
 
-const BASE = 'http://localhost:8001';
+const BASE = window.location.origin;
 let checkN = 0, backendWasUp = false;
 
 function setCheck(n, state, detail, badge) {
