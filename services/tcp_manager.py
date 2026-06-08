@@ -192,6 +192,91 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
         return None
 
 
+
+def handle_em200_connection(sock: socket.socket, device_id: int, device_type: str):
+    """
+    EM200 IP Urine Analyser — persistent connection handler.
+    
+    Protocol:
+    1. Machine connects to us (once, stays connected)
+    2. We send ENQ (0x05)
+    3. Machine replies ACK (0x06)
+    4. Machine sends ASTM frames for each sample
+    5. We ACK each frame, machine sends EOT at end
+    6. Loop — wait for next sample on same connection
+    7. Only exit if machine disconnects
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    ETX = b'\x03'
+
+    try:
+        sock.settimeout(10)
+        # Step 1: Send ENQ to initiate
+        sock.send(ENQ)
+        add_log(device_id, "📤 Sent ENQ to EM200", "info")
+
+        # Step 2: Wait for ACK (optional — some connections skip this)
+        try:
+            ack = sock.recv(1)
+            if not ack:
+                add_log(device_id, "⚠️ No ACK — machine disconnected", "warn")
+                return
+            if ack != ACK:
+                add_log(device_id, f"⚠️ Expected ACK (06), got: {ack.hex()} — continuing anyway", "warn")
+            else:
+                add_log(device_id, "✅ Got ACK from EM200 — connection established, waiting for samples...", "info")
+        except socket.timeout:
+            add_log(device_id, "⚠️ No ACK in 10s — staying connected, waiting for data...", "warn")
+
+        # Step 3: Loop forever — receive samples as they arrive
+        sock.settimeout(86400)  # 24 hour idle timeout — stay connected until machine disconnects
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            raw_bytes = b""
+            frame_count = 0
+
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        add_log(device_id, "⚠️ Machine disconnected", "warn")
+                        return
+
+                    # EM200 sends ENQ before each transmission — reply ACK
+                    if chunk == ENQ:
+                        sock.send(ACK)
+                        continue
+
+                    frame_count += 1
+                    if EOT in chunk:
+                        raw_bytes += chunk.replace(EOT, b"")
+                        sock.send(ACK)
+                        break
+                    raw_bytes += chunk
+                    if ETX in chunk:
+                        sock.send(ACK)
+
+            except socket.timeout:
+                add_log(device_id, "⚠️ EM200 idle timeout — disconnected", "warn")
+                return
+
+            if raw_bytes:
+                # Strip STX/ETX framing
+                cleaned = raw_bytes.replace(b'\x02', b'').replace(b'\x03', b'')
+                raw = cleaned.decode("ascii", errors="ignore").strip()
+                if raw:
+                    add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                    save_result(device_id, raw, device_type)
+                    add_log(device_id, "⏳ Ready for next sample...", "info")
+
+    except Exception as e:
+        add_log(device_id, f"❌ EM200 connection error: {e}", "error")
+
 # ── ASTM receive ──────────────────────────────────────────────
 
 def receive_astm(sock: socket.socket, timeout: int = 30) -> str:
@@ -355,18 +440,24 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                 set_device_online(device_id, True)
                 add_log(device_id, f"🔌 Machine connected from {addr[0]}:{addr[1]}", "success")
 
-                raw = receive_astm(conn)
-                conn.close()
+                # Route to correct handler based on port
+                if port == 6006:
+                    # EM200: persistent connection, we initiate with ENQ
+                    handle_em200_connection(conn, device_id, device_type)
+                    add_log(device_id, "⏳ Waiting for EM200 to reconnect...", "info")
+                else:
+                    # All other devices: machine initiates, standard ASTM
+                    raw = receive_astm(conn)
+                    if raw:
+                        add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Waiting for next sample...", "info")
 
+                conn.close()
                 with device_lock:
                     if device_id in device_states:
                         device_states[device_id]["connected"] = False
                 set_device_online(device_id, False)
-
-                if raw:
-                    add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
-                    save_result(device_id, raw, device_type)
-                    add_log(device_id, "⏳ Waiting for next sample...", "info")
 
             except socket.timeout:
                 continue

@@ -9,7 +9,7 @@ Auto-detects protocol from the first line.
 from datetime import datetime
 import re
 
-# ── Reference ranges ──────────────────────────────────────────────────────────
+# ── Reference ranges ──────────────────────────────────────────
 REFERENCE_RANGES = {
     # Hematology (CBC)
     "WBC":  {"min": 4.0,  "max": 11.0,  "unit": "10³/µL",  "name": "White Blood Cells"},
@@ -32,6 +32,7 @@ REFERENCE_RANGES = {
 
 
 def get_flag(param: str, value: float) -> str:
+    """Return H (High), L (Low), or N (Normal) for a parameter value."""
     ref = REFERENCE_RANGES.get(param)
     if not ref:
         return "N"
@@ -42,27 +43,16 @@ def get_flag(param: str, value: float) -> str:
     return "N"
 
 
-def strip_astm_framing(raw_text: str) -> str:
-    """
-    Strip ASTM framing bytes from raw data.
-    Each frame: STX(0x02) + frame_num + data + ETX(0x03) + checksum(2 chars) + CR/LF
-    Also handles ENQ/ACK protocol bytes.
-    """
-    # Remove STX (\x02) + optional frame number digit
-    clean = re.sub(r'\x02\d?', '', raw_text)
-    # Remove ETX (\x03) + 2-char hex checksum
-    clean = re.sub(r'\x03[0-9A-Fa-f]{0,2}', '', clean)
-    # Remove ENQ, ACK, EOT control bytes
-    clean = re.sub(r'[\x04\x05\x06]', '', clean)
-    # Normalize line endings
-    clean = clean.replace('\r\n', '\n').replace('\r', '\n')
-    return clean.strip()
-
-
 def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
-    """Parse ASTM LIS2-A2 formatted text into clean JSON."""
-    # Strip framing bytes first
-    text = strip_astm_framing(raw_text)
+    """
+    Parse ASTM LIS2-A2 formatted text into clean JSON.
+    Record types: H (Header), P (Patient), O (Order), R (Result), L (Terminator)
+    """
+    # Strip framing bytes and normalize line endings first
+    text = raw_text.replace('\r\n', '\n').replace('\r', '\n')
+    # Remove STX/ETX/ENQ/ACK/EOT framing bytes
+    import re as _re
+    text = _re.sub(r'[\x02\x03\x04\x05\x06]', '', text)
     lines = text.strip().split("\n")
     result = {
         "protocol":    "ASTM",
@@ -81,6 +71,9 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
         parts       = line.split("|")
         record_type = parts[0] if parts else ""
 
+        # Strip leading frame number from record type (e.g. "1H" -> "H")
+        record_type = record_type.lstrip("0123456789")
+
         if record_type == "H":
             result["message_type"] = "Header"
 
@@ -89,8 +82,13 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
                 result["patient_id"] = parts[3]
 
         elif record_type == "O":
-            if len(parts) > 3:
-                barcode_raw    = parts[3]
+            # Barcode can be at parts[2] or parts[3] depending on format
+            barcode_raw = ""
+            if len(parts) > 3 and parts[3].strip():
+                barcode_raw = parts[3]
+            elif len(parts) > 2 and parts[2].strip():
+                barcode_raw = parts[2]
+            if barcode_raw:
                 result["barcode"] = barcode_raw.replace("^", "").strip()
 
         elif record_type == "R":
@@ -99,6 +97,7 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
                 value_raw = parts[3] if len(parts) > 3 else "0"
                 unit_raw  = parts[4] if len(parts) > 4 else ""
 
+                # Extract param name: ^^^WBC → WBC
                 param = re.sub(r'[\^]+', '', test_raw).strip().upper()
 
                 try:
@@ -172,18 +171,22 @@ def parse_hl7(raw_text: str) -> dict:
 def parse_erba_ec90(raw_text: str) -> dict:
     """
     Parse Erba EC90 electrolyte analyser format.
-    Strips STX/ETX ASTM framing bytes before parsing.
-
-    Raw format (with framing):
-    \x021H|\^&|EC90|....\x03BD
-    \x022P|1|00005172|...\x0305
-    \x023OBR|1|00005172|000715726S|UserOne|...\x0381
-    \x024OBX|1|00005172|TYPE|Na|133.7|mmol/l|...\x03B1
+    Uses OBX records: Na, K, Cl, Ca
+    
+    Example:
+    1H|\^&|EC90|05217|...
+    2P|1|00005172|...
+    3OBR|1|00005172|000715726S|...
+    4OBX|1|00005172|TYPE|Na|133.7|mmol/l|...
+    5OBX|2|00005172|TYPE|K|5.04|mmol/l|...
+    6OBX|3|00005172|TYPE|Cl|103.1|mmol/l|...
     """
-    # Strip ASTM framing bytes first
-    text = strip_astm_framing(raw_text)
-    lines = text.strip().split("\n")
-
+    # Strip STX/ETX framing and normalize line endings
+    import re as _re2
+    _text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    _text = _re2.sub(r"[\x02\x03\x04\x05\x06]", "", _text)
+    # Strip frame number prefix from start of each line (e.g. "3OBR" -> "OBR")
+    lines = [_re2.sub(r"^\d+", "", l) for l in _text.strip().split("\n")]
     result = {
         "protocol":    "ASTM",
         "device_type": "Electrolyte",
@@ -193,6 +196,7 @@ def parse_erba_ec90(raw_text: str) -> dict:
         "parameters":  [],
     }
 
+    # Reference ranges for electrolytes
     elec_refs = {
         "Na": {"min": 136, "max": 145, "unit": "mmol/l", "name": "Sodium"},
         "K":  {"min": 3.5, "max": 5.0, "unit": "mmol/l", "name": "Potassium"},
@@ -201,35 +205,40 @@ def parse_erba_ec90(raw_text: str) -> dict:
     }
 
     for line in lines:
+        # Remove leading frame number and strip
         line = line.strip()
         if not line:
             continue
+
+        # Remove leading digit (frame number)
+        if line and line[0].isdigit():
+            line = line[1:]
 
         parts = line.split("|")
         record = parts[0] if parts else ""
 
         if record == "OBR":
-            if len(parts) > 3 and parts[3].strip():
-                result["barcode"] = parts[3].strip()
-            elif len(parts) > 2 and parts[2].strip():
-                result["barcode"] = parts[2].strip()
+            # OBR|1|00005172|000715726S|...
+            if len(parts) > 3:
+                result["barcode"] = parts[3].strip() or (parts[2].strip() if len(parts) > 2 else None)
 
         elif record == "P":
             if len(parts) > 2:
                 result["patient_id"] = parts[2].strip()
 
         elif record == "OBX":
+            # OBX|1|00005172|TYPE|Na|133.7|mmol/l|...
             if len(parts) >= 6:
-                param   = parts[4].strip() if len(parts) > 4 else ""
+                param = parts[4].strip() if len(parts) > 4 else ""
                 val_str = parts[5].strip() if len(parts) > 5 else "0"
-                unit    = parts[6].strip() if len(parts) > 6 else ""
+                unit = parts[6].strip() if len(parts) > 6 else ""
 
                 try:
                     value = float(val_str)
                 except Exception:
                     value = 0.0
 
-                ref  = elec_refs.get(param, {})
+                ref = elec_refs.get(param, {})
                 flag = "N"
                 if ref:
                     if value < ref.get("min", 0):
@@ -254,13 +263,16 @@ def parse_erba_ec90(raw_text: str) -> dict:
 def auto_parse(raw_text: str, device_type: str = "Hematology") -> dict:
     """
     Auto-detect protocol and parse accordingly.
-    HL7       → starts with MSH|
+    HL7      → starts with MSH|
     Erba EC90 → contains OBX records
-    ASTM      → everything else
+    ASTM     → everything else
     """
     text = raw_text.strip()
     if text.startswith("MSH|"):
         return parse_hl7(text)
-    if "OBX" in text:
+    # EC90 uses OBR/OBX segments (no standard O|/R| records)
+    has_standard_o = any(line.startswith("O|") for line in text.replace("\r","\n").split("\n"))
+    if "OBX" in text and "OBR" in text and not has_standard_o:
         return parse_erba_ec90(text)
+    # Standard ASTM with O|/R| records (EM200, XL200, etc.)
     return parse_astm(text, device_type)
