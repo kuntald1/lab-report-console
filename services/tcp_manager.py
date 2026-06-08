@@ -29,6 +29,13 @@ scan_lock = threading.Lock()
 # Server sockets for server-mode devices
 server_sockets: dict = {}
 
+# ── Deduplication cache ───────────────────────────────────────
+# Prevents saving the same barcode twice within DEDUP_WINDOW seconds.
+# Key: (device_id, barcode)  Value: timestamp of last save
+DEDUP_WINDOW  = 30  # seconds
+_dedup_cache: dict = {}
+_dedup_lock   = threading.Lock()
+
 
 # ── Default state ─────────────────────────────────────────────
 
@@ -43,6 +50,33 @@ def _default_state() -> dict:
         "unknown":      0,          # barcode not found in DB
         "last_barcode": None,
     }
+
+
+def _is_duplicate(device_id: int, barcode: str) -> bool:
+    """
+    Return True if this (device_id, barcode) was already saved
+    within DEDUP_WINDOW seconds — i.e. it's a retransmit, skip it.
+    If not a duplicate, record the timestamp and return False.
+    Also prunes expired entries to keep the cache small.
+    """
+    if not barcode or barcode == "UNKNOWN":
+        return False  # never dedup unknown barcodes — might be different samples
+
+    key = (device_id, barcode)
+    now = time.monotonic()
+
+    with _dedup_lock:
+        # Prune all expired entries first
+        expired = [k for k, ts in _dedup_cache.items() if now - ts > DEDUP_WINDOW]
+        for k in expired:
+            del _dedup_cache[k]
+
+        if key in _dedup_cache:
+            return True  # duplicate — seen within the window, skip
+
+        # First occurrence in this window — record and allow
+        _dedup_cache[key] = now
+        return False
 
 
 # ── Logging ───────────────────────────────────────────────────
@@ -124,6 +158,16 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
         parsed  = auto_parse(raw_data, device_type)
         barcode = parsed.get("barcode") or "UNKNOWN"
         params  = len(parsed.get("parameters", []))
+
+        # ── Deduplication ─────────────────────────────────────
+        if _is_duplicate(device_id, barcode):
+            add_log(device_id,
+                f"⏭️ Duplicate skipped — Barcode: {barcode} already saved within {DEDUP_WINDOW}s",
+                "warn")
+            add_scan(device_id, device_name, barcode, "duplicate",
+                f"Skipped retransmit of {barcode} (within {DEDUP_WINDOW}s window)", params)
+            return None
+        # ─────────────────────────────────────────────────────
 
         db      = SessionLocal()
         patient = db.query(Patient).filter(Patient.barcode == barcode).first()
@@ -586,10 +630,11 @@ def get_scan_summary() -> dict:
     with scan_lock:
         today_scans = [s for s in scan_log if s["date"] == today]
     return {
-        "today":   today,
-        "total":   len(today_scans),
-        "success": sum(1 for s in today_scans if s["status"] == "success"),
-        "unknown": sum(1 for s in today_scans if s["status"] == "unknown"),
-        "error":   sum(1 for s in today_scans if s["status"] == "error"),
-        "scans":   list(reversed(today_scans)),
+        "today":     today,
+        "total":     len(today_scans),
+        "success":   sum(1 for s in today_scans if s["status"] == "success"),
+        "unknown":   sum(1 for s in today_scans if s["status"] == "unknown"),
+        "error":     sum(1 for s in today_scans if s["status"] == "error"),
+        "duplicate": sum(1 for s in today_scans if s["status"] == "duplicate"),
+        "scans":     list(reversed(today_scans)),
     }
