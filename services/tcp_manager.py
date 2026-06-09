@@ -145,19 +145,33 @@ def set_device_online(device_id: int, online: bool):
 def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
     """
     Parse raw ASTM/HL7 data and save to database.
+    Reads device.parser from DB and passes it to auto_parse() so each
+    machine uses its own dedicated parser function.
     Tracks:
       - success  → result saved, patient found
       - unknown  → result saved but patient not in DB (barcode unknown)
       - error    → parse or DB error
     """
     device = get_device(device_id)
-    device_name = device.name if device else f"Device {device_id}"
-    patient_name = None  # Initialize before try block
+    device_name   = device.name        if device else f"Device {device_id}"
+    device_parser = getattr(device, "parser", None) if device else None  # e.g. "erba_xl200"
+    patient_name  = None  # Initialize before try block
 
     try:
-        parsed  = auto_parse(raw_data, device_type)
+        parsed  = auto_parse(raw_data, device_type, parser=device_parser)
         barcode = parsed.get("barcode") or "UNKNOWN"
         params  = len(parsed.get("parameters", []))
+
+        # ── QC / Control sample filter ────────────────────────
+        # Skip calibration/control samples — they are not patient results.
+        # Patterns: BIORAD, QC, CONTROL, CAL, CALIBRATOR (case-insensitive)
+        QC_PREFIXES = ("BIORAD", "QC", "CONTROL", "CAL", "CALIBRAT", "CTRL")
+        if any(barcode.upper().startswith(p) for p in QC_PREFIXES):
+            add_log(device_id,
+                f"🧪 QC sample ignored — Barcode: {barcode} (control/calibration)",
+                "info")
+            return None
+        # ─────────────────────────────────────────────────────
 
         # ── Deduplication ─────────────────────────────────────
         if _is_duplicate(device_id, barcode):
@@ -320,6 +334,101 @@ def handle_em200_connection(sock: socket.socket, device_id: int, device_type: st
 
     except Exception as e:
         add_log(device_id, f"❌ EM200 connection error: {e}", "error")
+
+
+def handle_xl200_connection(sock: socket.socket, device_id: int, device_type: str):
+    """
+    XL200 Biochemistry Analyser — persistent bidirectional connection handler.
+
+    Protocol (identical to EM200 — Erba standard bidirectional ASTM):
+    1. Machine connects to us (once, stays connected)
+    2. We send ENQ (0x05)
+    3. Machine replies ACK (0x06)
+    4. Machine sends ASTM frames (H/P/O/R/L records)
+    5. We ACK each ETX frame
+    6. Machine sends EOT — we save result
+    7. We send ENQ again — ready for next sample
+    8. Loop on same connection until machine disconnects
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    ETX = b'\x03'
+
+    try:
+        sock.settimeout(10)
+
+        # Step 1: Send ENQ to initiate
+        sock.send(ENQ)
+        add_log(device_id, "📤 Sent ENQ to XL200", "info")
+
+        # Step 2: Wait for ACK
+        try:
+            ack = sock.recv(1)
+            if not ack:
+                add_log(device_id, "⚠️ No ACK — XL200 disconnected", "warn")
+                return
+            if ack != ACK:
+                add_log(device_id, f"⚠️ Expected ACK (06), got: {ack.hex()} — continuing anyway", "warn")
+            else:
+                add_log(device_id, "✅ Got ACK from XL200 — ready for samples", "info")
+        except socket.timeout:
+            add_log(device_id, "⚠️ No ACK in 10s — staying connected, waiting for data...", "warn")
+
+        # Step 3: Loop — receive samples, send ENQ after each EOT
+        sock.settimeout(86400)  # 24h idle — stay connected
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            raw_bytes = b""
+
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        add_log(device_id, "⚠️ XL200 disconnected", "warn")
+                        return
+
+                    # XL200 sends ENQ before each new sample transmission
+                    if chunk == ENQ:
+                        sock.send(ACK)
+                        add_log(device_id, "↩️ ENQ received — sent ACK, waiting for frames...", "info")
+                        continue
+
+                    if EOT in chunk:
+                        raw_bytes += chunk.replace(EOT, b"")
+                        sock.send(ACK)  # ACK the EOT
+                        break           # Full transmission received
+
+                    raw_bytes += chunk
+                    if ETX in chunk:
+                        sock.send(ACK)  # ACK each data frame
+
+            except socket.timeout:
+                add_log(device_id, "⚠️ XL200 idle timeout — disconnected", "warn")
+                return
+
+            if raw_bytes:
+                cleaned = raw_bytes.replace(b'\x02', b'').replace(b'\x03', b'')
+                raw = cleaned.decode("ascii", errors="ignore").strip()
+                if raw:
+                    add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                    save_result(device_id, raw, device_type)
+                    add_log(device_id, "⏳ Ready for next sample...", "info")
+
+                    # Send ENQ to signal ready for next transmission
+                    try:
+                        sock.settimeout(5)
+                        sock.send(ENQ)
+                        sock.settimeout(86400)
+                    except Exception:
+                        pass  # If send fails, machine will reconnect
+
+    except Exception as e:
+        add_log(device_id, f"❌ XL200 connection error: {e}", "error")
+
 
 # ── ASTM receive ──────────────────────────────────────────────
 
@@ -486,9 +595,13 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
 
                 # Route to correct handler based on port
                 if port == 6006:
-                    # EM200: persistent connection, we initiate with ENQ
+                    # EM200: persistent ENQ-first connection
                     handle_em200_connection(conn, device_id, device_type)
                     add_log(device_id, "⏳ Waiting for EM200 to reconnect...", "info")
+                elif port == 5001:
+                    # XL200: persistent ENQ-first connection (bidirectional)
+                    handle_xl200_connection(conn, device_id, device_type)
+                    add_log(device_id, "⏳ Waiting for XL200 to reconnect...", "info")
                 else:
                     # All other devices: machine initiates, standard ASTM
                     raw = receive_astm(conn)

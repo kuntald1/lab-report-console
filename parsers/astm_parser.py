@@ -74,6 +74,10 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
         # Strip leading frame number from record type (e.g. "1H" -> "H")
         record_type = record_type.lstrip("0123456789")
 
+        # Skip lines that aren't valid ASTM record types
+        if record_type not in ("H", "P", "O", "R", "C", "L", "Q", "M"):
+            continue
+
         if record_type == "H":
             result["message_type"] = "Header"
 
@@ -260,18 +264,104 @@ def parse_erba_ec90(raw_text: str) -> dict:
     return result
 
 
-def auto_parse(raw_text: str, device_type: str = "Hematology") -> dict:
+def parse_xl200(raw_text: str) -> dict:
     """
-    Auto-detect protocol and parse accordingly.
-    HL7      → starts with MSH|
-    Erba EC90 → contains OBX records
-    ASTM     → everything else
+    Parse Erba XL200 Biochemistry Analyser — ASTM LIS2-A2 over TCP.
+
+    The XL200 sends standard ASTM frames (H/P/O/R/L records) but with
+    some quirks:
+      - Frame numbers prefix every record (e.g. "1H", "2P", "3O", "4R")
+      - Test codes come through as short codes: GLU, CREA, UREA, ALT,
+        AST, CHOL, TRIG, TP, ALB, TBIL, DBIL, GGT, ALP, LDH, UA, etc.
+      - Values in R records at parts[3], units at parts[4]
+      - Barcode in O record at parts[3] (may contain ^ separators)
+      - Sample type in O record at parts[11] (S=serum, U=urine, etc.)
+
+    This function is a dedicated wrapper around parse_astm() with
+    XL200-specific reference ranges merged in. It will never affect
+    EC90 or EM200 parsing.
+    """
+    # XL200-specific biochemistry reference ranges
+    # Merged on top of the global REFERENCE_RANGES in parse_astm
+    XL200_REFS = {
+        "TP":   {"min": 6.4,  "max": 8.3,  "unit": "g/dL",   "name": "Total Protein"},
+        "ALB":  {"min": 3.5,  "max": 5.0,  "unit": "g/dL",   "name": "Albumin"},
+        "TBIL": {"min": 0.2,  "max": 1.2,  "unit": "mg/dL",  "name": "Total Bilirubin"},
+        "DBIL": {"min": 0.0,  "max": 0.3,  "unit": "mg/dL",  "name": "Direct Bilirubin"},
+        "ALP":  {"min": 44,   "max": 147,  "unit": "U/L",    "name": "Alkaline Phosphatase"},
+        "GGT":  {"min": 8,    "max": 61,   "unit": "U/L",    "name": "GGT"},
+        "LDH":  {"min": 140,  "max": 280,  "unit": "U/L",    "name": "LDH"},
+        "UA":   {"min": 3.5,  "max": 7.2,  "unit": "mg/dL",  "name": "Uric Acid"},
+        "CA":   {"min": 8.6,  "max": 10.3, "unit": "mg/dL",  "name": "Calcium"},
+        "PHOS": {"min": 2.5,  "max": 4.5,  "unit": "mg/dL",  "name": "Phosphorus"},
+        "MG":   {"min": 1.6,  "max": 2.6,  "unit": "mg/dL",  "name": "Magnesium"},
+        "NA":   {"min": 136,  "max": 145,  "unit": "mmol/L",  "name": "Sodium"},
+        "K":    {"min": 3.5,  "max": 5.0,  "unit": "mmol/L",  "name": "Potassium"},
+        "CL":   {"min": 98,   "max": 107,  "unit": "mmol/L",  "name": "Chloride"},
+        "CO2":  {"min": 22,   "max": 29,   "unit": "mmol/L",  "name": "CO2 (Bicarbonate)"},
+        "AMY":  {"min": 28,   "max": 100,  "unit": "U/L",    "name": "Amylase"},
+        "LIPA": {"min": 13,   "max": 60,   "unit": "U/L",    "name": "Lipase"},
+        "CK":   {"min": 39,   "max": 308,  "unit": "U/L",    "name": "CK (Total)"},
+        "CKMB": {"min": 0,    "max": 25,   "unit": "U/L",    "name": "CK-MB"},
+        "IRON": {"min": 60,   "max": 170,  "unit": "µg/dL",  "name": "Iron"},
+        "TIBC": {"min": 250,  "max": 370,  "unit": "µg/dL",  "name": "TIBC"},
+    }
+
+    # Temporarily inject XL200 refs into global table, parse, then restore
+    # This keeps parse_astm() untouched and flag logic working correctly
+    added_keys = []
+    for k, v in XL200_REFS.items():
+        if k not in REFERENCE_RANGES:
+            REFERENCE_RANGES[k] = v
+            added_keys.append(k)
+        # If key already exists (e.g. GLU from hematology table), don't overwrite
+
+    result = parse_astm(raw_text, device_type="Biochemistry")
+    result["device_type"] = "Biochemistry"
+    result["parser"] = "xl200"
+
+    # Clean up any keys we temporarily added
+    for k in added_keys:
+        del REFERENCE_RANGES[k]
+
+    return result
+
+
+def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = None) -> dict:
+    """
+    Route to the correct parser.
+
+    Priority order:
+    1. Explicit `parser` field from device DB record  ← new, zero ambiguity
+    2. HL7 auto-detect (MSH| prefix)
+    3. EC90 heuristic (OBX+OBR without O| records)
+    4. Standard ASTM fallback
+
+    parser values (match device.parser DB field):
+      "erba_ec90"  → parse_erba_ec90()
+      "erba_em200" → parse_astm()          (EM200 sends standard ASTM)
+      "erba_xl200" → parse_xl200()
+      None         → auto-detect as before  (safe fallback)
     """
     text = raw_text.strip()
+
+    # ── Explicit parser routing (preferred path) ──────────────
+    if parser:
+        p = parser.lower().strip()
+        if p == "erba_ec90":
+            return parse_erba_ec90(text)
+        if p in ("erba_em200", "astm"):
+            return parse_astm(text, device_type)
+        if p == "erba_xl200":
+            return parse_xl200(text)
+        # Unknown parser string — fall through to auto-detect below
+        # so new machines never break existing ones
+
+    # ── Auto-detect fallback (legacy path, EC90 + EM200 unchanged) ──
     if text.startswith("MSH|"):
         return parse_hl7(text)
     # EC90 uses OBR/OBX segments (no standard O|/R| records)
-    has_standard_o = any(line.startswith("O|") for line in text.replace("\r","\n").split("\n"))
+    has_standard_o = any(line.startswith("O|") for line in text.replace("\r", "\n").split("\n"))
     if "OBX" in text and "OBR" in text and not has_standard_o:
         return parse_erba_ec90(text)
     # Standard ASTM with O|/R| records (EM200, XL200, etc.)
