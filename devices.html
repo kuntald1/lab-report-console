@@ -558,11 +558,11 @@ function render() {
     const st    = states[d.id] || {};
     const isOn  = d.tcp_connected || st.connected;
     const isRun = d.tcp_running   || st.running;
-    const isSel = selectedDevId === d.id;
     const logs  = st.logs || [];
     const last  = logs[logs.length - 1];
     const total = d.total_results || st.total || 0;
     const dotCls = isOn ? 'on' : isRun ? 'run' : 'off';
+    const isSel = selectedDevId === d.id;
 
     return `
       <div class="dev-row ${isSel?'selected':''} ${isOn?'connected':''}" id="row-${d.id}">

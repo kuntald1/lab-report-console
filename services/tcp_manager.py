@@ -45,9 +45,9 @@ def _default_state() -> dict:
         "connected":    False,
         "thread":       None,
         "logs":         [],
-        "total":        0,          # successful results saved
-        "errors":       0,          # failed parse/save attempts
-        "unknown":      0,          # barcode not found in DB
+        "total":        0,
+        "errors":       0,
+        "unknown":      0,
         "last_barcode": None,
     }
 
