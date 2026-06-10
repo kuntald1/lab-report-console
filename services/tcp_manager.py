@@ -491,6 +491,102 @@ def handle_h560_connection(sock, device_id, device_type):
         add_log(device_id, f"❌ H560 error: {e}", "error")
 
 
+def handle_gh900_connection(sock, device_id, device_type):
+    """
+    Lifotronic GH-900 HbA1c Analyser — persistent ENQ/ACK handler.
+    ────────────────────────────────────────────────────────────────
+    Protocol (from official Lifotronic GH-900 Plus LIS document):
+      Machine → ENQ (0x05)   : ready to transmit
+      MediCloud → ACK (0x06) : go ahead
+      Machine → STX frames   : ASTM data (H/P/O/R/L records)
+      MediCloud → ACK each ETX frame
+      Machine → EOT (0x04)   : end of transmission → save result
+
+    Critical behaviour:
+    - The machine holds the TCP connection open indefinitely (keepalive).
+    - ENQ is sent ONLY when the operator clicks LIS on a result — which
+      may happen seconds or minutes after the connection is established.
+    - We must NEVER close this socket due to idle timeout — doing so
+      causes the machine to enter a rapid reconnect/retry loop.
+    - Socket stays open until the machine disconnects.
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    ETX = b'\x03'
+    STX = b'\x02'
+
+    try:
+        add_log(device_id, "🔌 GH-900 connected — waiting for ENQ (no idle timeout)...", "info")
+
+        # No timeout — keep the connection alive until machine disconnects
+        sock.settimeout(None)  # blocking forever — machine drives the timing
+
+        raw_bytes = b""
+
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            chunk = sock.recv(1)  # read 1 byte at a time for precise ENQ detection
+            if not chunk:
+                add_log(device_id, "⚠️ GH-900 disconnected", "warn")
+                break
+
+            # Log every byte received
+            add_log(device_id,
+                f"📨 GH-900 byte: hex={chunk.hex()} | repr={repr(chunk)}",
+                "info")
+
+            if chunk == ENQ:
+                # Machine wants to send — reply ACK immediately
+                sock.send(ACK)
+                add_log(device_id, "↩️ ENQ → ACK sent — receiving frames...", "info")
+                raw_bytes = b""  # reset buffer for this transmission
+                continue
+
+            if chunk == EOT:
+                # End of transmission — process result
+                add_log(device_id, "✅ EOT received — processing result...", "info")
+                if raw_bytes:
+                    cleaned = (raw_bytes
+                               .replace(STX, b"")
+                               .replace(ETX, b"")
+                               .replace(ENQ, b"")
+                               .replace(ACK, b""))
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    add_log(device_id,
+                        f"📦 Full transmission: {len(raw_bytes)}B | text={repr(raw[:100])}",
+                        "info")
+                    if raw:
+                        add_log(device_id,
+                            f"📥 Received {len(raw)} bytes (ASTM) — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next upload...", "info")
+                    else:
+                        add_log(device_id,
+                            f"⚠️ EOT but no parseable ASCII — hex={raw_bytes.hex()}", "warn")
+                    raw_bytes = b""
+                continue
+
+            if chunk == ETX:
+                # End of a data frame — ACK it
+                raw_bytes += chunk
+                try:
+                    sock.send(ACK)
+                    add_log(device_id, "↩️ ETX → ACK sent", "info")
+                except Exception:
+                    pass
+                continue
+
+            # Regular data byte — accumulate
+            raw_bytes += chunk
+
+    except Exception as e:
+        add_log(device_id, f"❌ GH-900 error: {e}", "error")
+
+
 def receive_astm(sock: socket.socket, timeout: int = 30) -> str:
     """
     Read ASTM data from socket with ENQ/ACK handshake support.
@@ -734,6 +830,14 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                     # H560: run in thread — keepalive + data connections come simultaneously
                     threading.Thread(
                         target=handle_h560_connection,
+                        args=(conn, device_id, device_type),
+                        daemon=True
+                    ).start()
+                    continue  # Don't close conn — thread owns it
+                elif port in (7777, 8080):
+                    # GH-900: run in thread so new connections can be accepted
+                    threading.Thread(
+                        target=handle_gh900_connection,
                         args=(conn, device_id, device_type),
                         daemon=True
                     ).start()
