@@ -430,7 +430,66 @@ def handle_xl200_connection(sock: socket.socket, device_id: int, device_type: st
         add_log(device_id, f"❌ XL200 connection error: {e}", "error")
 
 
-# ── ASTM receive ──────────────────────────────────────────────
+
+def handle_h560_connection(sock, device_id, device_type):
+    """
+    Erba H560 Hematology Analyser — HL7/MLLP dedicated handler.
+    H560 sends HL7 v2.3 data on the keepalive connection when Comm. is clicked
+    or after Auto-communication triggers. Keeps connection alive 5 minutes.
+    Data format: MLLP framed (0x0b...0x1c 0x0d) HL7 with MSH/PID/OBR/OBX.
+    Completely separate from EM200, XL200, EC90 handlers.
+    """
+    try:
+        add_log(device_id, "🔌 H560 connected — listening for HL7 data (5min)...", "info")
+        sock.settimeout(300)  # 5 minutes — operator may click Comm. anytime
+        raw_bytes = b""
+
+        while True:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    add_log(device_id, "⚠️ H560 disconnected", "warn")
+                    break
+
+                raw_bytes += chunk
+                add_log(device_id, f"📦 H560: {len(chunk)}B total:{len(raw_bytes)}B | {chunk[:6].hex()}", "info")
+
+                # HL7 MLLP end marker: 0x1c 0x0d
+                if b'\x1c\x0d' in raw_bytes:
+                    cleaned = raw_bytes.replace(b'\x0b', b'').replace(b'\x1c\x0d', b'')
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    if raw:
+                        add_log(device_id, f"📥 Received {len(raw)} bytes (HL7) — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next sample...", "info")
+                    raw_bytes = b""  # Reset for next message on same connection
+                    continue
+
+                # ASTM EOT
+                if b'\x04' in raw_bytes:
+                    cleaned = raw_bytes.replace(b'\x02', b'').replace(b'\x03', b'').replace(b'\x04', b'')
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    if raw:
+                        add_log(device_id, f"📥 Received {len(raw)} bytes (ASTM) — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next sample...", "info")
+                    raw_bytes = b""
+                    continue
+
+                # ASTM ETX — send ACK
+                if b'\x03' in chunk:
+                    try:
+                        sock.send(b'\x06')
+                    except Exception:
+                        pass
+
+            except socket.timeout:
+                add_log(device_id, "⏰ H560 5min timeout — closing connection", "info")
+                break
+
+    except Exception as e:
+        add_log(device_id, f"❌ H560 error: {e}", "error")
+
 
 def receive_astm(sock: socket.socket, timeout: int = 30) -> str:
     """
@@ -502,6 +561,41 @@ def receive_astm(sock: socket.socket, timeout: int = 30) -> str:
 
 # ── MODE 1: CLIENT — MediCloud connects TO machine ────────────
 
+def receive_astm_with_first_byte(sock: socket.socket, first: bytes) -> str:
+    """Like receive_astm but first byte already read."""
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    ETX = b'\x03'
+    raw_bytes = b""
+    sock.settimeout(30)
+    try:
+        if first == ENQ:
+            sock.send(ACK)
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                if EOT in chunk:
+                    raw_bytes += chunk.replace(EOT, b"")
+                    break
+                raw_bytes += chunk
+                if ETX in chunk:
+                    sock.send(ACK)
+        else:
+            raw_bytes = first
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                raw_bytes += chunk
+                decoded = raw_bytes.decode("ascii", errors="ignore")
+                if "L|1|N" in decoded or EOT in chunk:
+                    break
+    except Exception:
+        pass
+    return raw_bytes.decode("ascii", errors="ignore").strip()
+
 def client_thread_fn(device_id: int, ip: str, port: int, device_type: str, retry: int):
     add_log(device_id, f"🔵 CLIENT MODE — Will connect to {ip}:{port}", "info")
 
@@ -522,17 +616,51 @@ def client_thread_fn(device_id: int, ip: str, port: int, device_type: str, retry
             add_log(device_id, f"🟢 Connected to {ip}:{port}", "success")
             add_log(device_id, "⏳ Waiting for sample...", "info")
 
+            sock.settimeout(300)
             while True:
                 with device_lock:
                     if not device_states.get(device_id, {}).get("running"):
                         break
-                raw = receive_astm(sock, timeout=300)
-                if not raw:
+                try:
+                    # Just wait — H560 will push data after validation
+                    sock.settimeout(120)
+                    try:
+                        incoming = sock.recv(4096)
+                        if not incoming:
+                            add_log(device_id, "⚠️ Connection closed by machine", "warn")
+                            break
+                        add_log(device_id, f"🔍 H560 sent: {incoming.hex()} | {repr(incoming[:60])}", "info")
+                        raw = receive_astm_with_first_byte(sock, incoming[:1])
+                        if len(incoming) > 1:
+                            raw = incoming.decode("ascii", errors="ignore") + raw
+                        if raw.strip():
+                            add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                            save_result(device_id, raw, device_type)
+                            add_log(device_id, "⏳ Ready for next sample...", "info")
+                    except socket.timeout:
+                        add_log(device_id, "⚠️ Connection closed by machine", "warn")
+                        break
+
+                    first = sock.recv(1)
+                    if not first:
+                        add_log(device_id, "⚠️ Connection closed by machine", "warn")
+                        break
+
+                    add_log(device_id, f"🔍 H560 response: {first.hex()} ({repr(first)})", "info")
+
+                    raw = receive_astm_with_first_byte(sock, first)
+                    if raw:
+                        add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next sample...", "info")
+                    else:
+                        # Wait before sending next ENQ
+                        import time as _time
+                        _time.sleep(5)
+
+                except socket.timeout:
                     add_log(device_id, "⚠️ Connection closed by machine", "warn")
                     break
-                add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
-                save_result(device_id, raw, device_type)
-                add_log(device_id, "⏳ Ready for next sample...", "info")
 
             sock.close()
 
@@ -602,9 +730,17 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                     # XL200: persistent ENQ-first connection (bidirectional)
                     handle_xl200_connection(conn, device_id, device_type)
                     add_log(device_id, "⏳ Waiting for XL200 to reconnect...", "info")
+                elif port == 5005:
+                    # H560: run in thread — keepalive + data connections come simultaneously
+                    threading.Thread(
+                        target=handle_h560_connection,
+                        args=(conn, device_id, device_type),
+                        daemon=True
+                    ).start()
+                    continue  # Don't close conn — thread owns it
                 else:
-                    # All other devices: machine initiates, standard ASTM
-                    raw = receive_astm(conn)
+                    # All other devices: standard receive
+                    raw = receive_astm(conn, timeout=60)
                     if raw:
                         add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
                         save_result(device_id, raw, device_type)

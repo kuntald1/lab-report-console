@@ -127,10 +127,17 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
 
 
 def parse_hl7(raw_text: str) -> dict:
-    """Parse HL7 v2.x format (MSH, PID, OBR, OBX segments)."""
-    segments = raw_text.strip().split("\n")
+    """
+    Parse HL7 v2.x format (MSH, PID, OBR, OBX segments).
+    Handles Erba H560 HL7 output with LOINC codes.
+    """
+    # Normalize line endings — HL7 uses \r as segment separator
+    text = raw_text.replace('\r\n', '\r').replace('\n', '\r')
+    segments = [s.strip() for s in text.strip().split("\r") if s.strip()]
+
     result = {
         "protocol":    "HL7",
+        "device_type": "Hematology",
         "parsed_at":   datetime.now().isoformat(),
         "patient_id":  None,
         "barcode":     None,
@@ -142,32 +149,75 @@ def parse_hl7(raw_text: str) -> dict:
         seg_type = fields[0] if fields else ""
 
         if seg_type == "PID":
-            result["patient_id"] = fields[3] if len(fields) > 3 else None
+            # PID|1||HC12011^^^...  — patient barcode in field 3
+            raw_pid = fields[3] if len(fields) > 3 else ""
+            pid = raw_pid.split("^")[0].strip() if raw_pid else None
+            result["patient_id"] = pid
+            if pid:
+                result["barcode"] = pid  # Use patient ID as barcode for H560
 
         elif seg_type == "OBR":
-            result["barcode"] = fields[3] if len(fields) > 3 else None
+            # OBR|1||HC117610| — sample ID (not patient barcode)
+            result["sample_id"] = fields[3].strip() if len(fields) > 3 else None
+            # Only use as barcode fallback if no patient ID
+            if not result.get("barcode"):
+                result["barcode"] = result.get("sample_id")
 
         elif seg_type == "OBX":
+            # OBX|7|NM|6690-2^WBC^LN||6.89|10*3/uL|3.50-9.50|~N
             if len(fields) >= 6:
-                param = (fields[3] or "").split("^")[0].upper()
+                # Field 3: LOINC^name^system — extract short name
+                code_field = fields[3] if len(fields) > 3 else ""
+                code_parts = code_field.split("^")
+                # Use second part (name) if available, else first (LOINC code)
+                param_name = code_parts[1] if len(code_parts) > 1 else code_parts[0]
+                param = re.sub(r'[^A-Za-z0-9%#*]', '', param_name).upper()
+
+                # Skip non-numeric types
+                obs_type = fields[2] if len(fields) > 2 else ""
+                if obs_type not in ("NM",):
+                    continue
+
                 try:
                     value = float(fields[5])
                 except Exception:
-                    value = 0.0
+                    continue  # Skip non-numeric values
 
-                ref  = REFERENCE_RANGES.get(param, {})
-                flag = get_flag(param, value)
+                unit_raw  = fields[6].strip() if len(fields) > 6 else ""
+                ref_range = fields[7].strip() if len(fields) > 7 else ""
+                flag_raw  = fields[8].strip() if len(fields) > 8 else "N"
+
+                # Parse ref range "3.50-9.50"
+                ref_min, ref_max = "", ""
+                if "-" in ref_range:
+                    parts = ref_range.split("-")
+                    try:
+                        ref_min = float(parts[0])
+                        ref_max = float(parts[1])
+                    except Exception:
+                        pass
+
+                # Normalize flag — H560 uses "~N", "H~A", "L~A" format
+                flag = "N"
+                if "H" in flag_raw:
+                    flag = "H"
+                elif "L" in flag_raw:
+                    flag = "L"
+
+                ref = REFERENCE_RANGES.get(param, {})
 
                 result["parameters"].append({
                     "param":   param,
-                    "name":    ref.get("name", param),
+                    "name":    ref.get("name", param_name),
                     "value":   value,
-                    "unit":    fields[6] if len(fields) > 6 else ref.get("unit", ""),
-                    "ref_min": ref.get("min", ""),
-                    "ref_max": ref.get("max", ""),
+                    "unit":    unit_raw or ref.get("unit", ""),
+                    "ref_min": ref_min or ref.get("min", ""),
+                    "ref_max": ref_max or ref.get("max", ""),
                     "flag":    flag,
                     "status":  "Normal" if flag == "N" else ("High" if flag == "H" else "Low"),
                 })
+
+    return result
 
     return result
 
@@ -354,12 +404,15 @@ def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = Non
             return parse_astm(text, device_type)
         if p == "erba_xl200":
             return parse_xl200(text)
+        if p in ("erba_h560", "hl7"):
+            return parse_hl7(text)
         # Unknown parser string — fall through to auto-detect below
-        # so new machines never break existing ones
 
-    # ── Auto-detect fallback (legacy path, EC90 + EM200 unchanged) ──
-    if text.startswith("MSH|"):
-        return parse_hl7(text)
+    # ── Auto-detect fallback ──────────────────────────────────
+    # Strip any leading control bytes before checking format
+    clean = text.lstrip('\x00\x01\x02\x03\x04\x05\x06\x0b\x1c')
+    if clean.startswith("MSH|"):
+        return parse_hl7(clean)
     # EC90 uses OBR/OBX segments (no standard O|/R| records)
     has_standard_o = any(line.startswith("O|") for line in text.replace("\r", "\n").split("\n"))
     if "OBX" in text and "OBR" in text and not has_standard_o:
