@@ -98,23 +98,86 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
         elif record_type == "R":
             if len(parts) >= 4:
                 test_raw  = parts[2] if len(parts) > 2 else ""
-                value_raw = parts[3] if len(parts) > 3 else "0"
+                value_raw = (parts[3] if len(parts) > 3 else "").strip()
                 unit_raw  = parts[4] if len(parts) > 4 else ""
 
-                # Extract param name: ^^^WBC → WBC
-                param = re.sub(r'[\^]+', '', test_raw).strip().upper()
+                # Extract param name: ^^^^WBC^1 -> WBC (strip ^ and trailing ^N digit)
+                param = re.sub(r"[\^]+", "", test_raw).strip()
+                param = re.sub(r"\^\d+$", "", param)   # strip ^1 suffix
+                param = re.sub(r"\d+$", "", param).strip().upper()
+
+                # Skip if no param name
+                if not param:
+                    continue
+
+                # Skip Q-Flag comment records (param names containing ?)
+                if "?" in param or "?" in test_raw:
+                    continue
+
+                # Skip image/scatter plot records (PNG values)
+                if "PNG" in value_raw or param.startswith("SCAT_") or param.startswith("DIST_"):
+                    continue
+
+                # Skip internal analyser metrics not shown on machine result screen
+                SKIP_PARAMS = {"MICROR", "MACROR", "HYPERCHROMIA", "HYPOCHROMIA"}
+                if param in SKIP_PARAMS:
+                    continue
+
+                # Skip interpretation/flag records — have no value and are not CBC params
+                # e.g. Neutropenia, Lymphopenia, Positive_Diff, Positive_Morph, Positive_Count
+                # These are R records with empty value and non-standard param names
+                KNOWN_CBC_PARAMS = {
+                    "WBC","RBC","HGB","HCT","MCV","MCH","MCHC","PLT",
+                    "NEUT","LYMPH","MONO","EO","BASO",
+                    "NEUT#","LYMPH#","MONO#","EO#","BASO#",
+                    "NEUT%","LYMPH%","MONO%","EO%","BASO%",
+                    "RDW-SD","RDW-CV","PDW","MPV","P-LCR","PCT",
+                    "IG#","IG%","NRBC#","NRBC%","RET#","RET%",
+                    "IRF","LFR","MFR","HFR","IPF",
+                }
+                # If value is empty AND param not a known CBC param → skip (interpretation flag)
+                if not value_raw and param not in KNOWN_CBC_PARAMS:
+                    continue
+
+                # "----" means not measured — show as ---- in report
+                if value_raw == "----":
+                    result["parameters"].append({
+                        "param":   param,
+                        "name":    param,
+                        "value":   None,
+                        "unit":    unit_raw,
+                        "ref_min": "",
+                        "ref_max": "",
+                        "flag":    "N",
+                        "status":  "----",
+                    })
+                    continue
+
+                # Empty value for known CBC param — also show as ----
+                if not value_raw:
+                    result["parameters"].append({
+                        "param":   param,
+                        "name":    param,
+                        "value":   None,
+                        "unit":    unit_raw,
+                        "ref_min": "",
+                        "ref_max": "",
+                        "flag":    "N",
+                        "status":  "----",
+                    })
+                    continue
 
                 try:
                     value = float(value_raw)
                 except Exception:
-                    value = 0.0
+                    continue  # Skip non-numeric values (e.g. PNG refs)
 
                 ref  = REFERENCE_RANGES.get(param, {})
                 flag = get_flag(param, value)
 
                 result["parameters"].append({
                     "param":   param,
-                    "name":    ref.get("name", param),
+                    "name":    param,
                     "value":   value,
                     "unit":    unit_raw or ref.get("unit", ""),
                     "ref_min": ref.get("min", ""),
@@ -377,88 +440,6 @@ def parse_xl200(raw_text: str) -> dict:
     return result
 
 
-def parse_gh900(raw_text: str) -> dict:
-    """
-    Parse Lifotronic GH-900 HbA1c Analyser proprietary format.
-
-    The GH-900 sends a binary-ish stream (no standard ASTM records):
-      S06----<NN><BARCODE><DIGITS><ABSORPTION_STREAM>
-
-    Where:
-      - <NN>               : 2-digit sample counter (e.g. 11 = sample 11)
-      - <BARCODE>          : alphanumeric patient barcode (e.g. HC805072RET)
-      - <DIGITS>           : fixed header block (date/time/reagent info), 9+ digits
-      - <ABSORPTION_STREAM>: 200+ chromatogram absorption values encoded as
-                             6-char fixed-width fields concatenated with a leading '.'
-                             e.g. ".00140.00290...8.2490..."
-
-    The HbA1c result is at index 11 (0-based) of the absorption stream,
-    which matches the machine's screen display (e.g. 8.249 → 8.2%).
-
-    QC samples (Type D on screen) have barcodes like QC1, QC2 and are
-    filtered upstream by save_result() via QC_PREFIXES.
-    """
-    import re as _re
-    result = {
-        "protocol":    "GH900",
-        "device_type": "HbA1c",
-        "parsed_at":   datetime.now().isoformat(),
-        "patient_id":  None,
-        "barcode":     None,
-        "parameters":  [],
-    }
-
-    text = raw_text.strip()
-
-    # Extract barcode and absorption stream
-    # Pattern: S + digits + dashes + digits + barcode + 9+ digit block + absorption
-    m = _re.match(r'S\d+\-+\d+([A-Za-z0-9]+?)(\d{9,})(.*)', text, _re.DOTALL)
-    if not m:
-        return result
-
-    barcode     = m.group(1).strip()
-    absorption_raw = m.group(3)  # starts with '.'
-
-    result["barcode"] = barcode if barcode else None
-
-    # Parse 6-char fixed-width absorption fields
-    # The stream starts with '.' so prepend '0' → '0.XXXX'
-    absorption_fixed = "0" + absorption_raw
-    chunks = [absorption_fixed[i:i+6] for i in range(0, len(absorption_fixed), 6)]
-
-    values = []
-    for chunk in chunks:
-        try:
-            values.append(float(chunk))
-        except ValueError:
-            pass
-
-    # HbA1c result is at absorption index 11
-    HBAIC_INDEX = 11
-    if len(values) > HBAIC_INDEX:
-        hba1c = round(values[HBAIC_INDEX], 2)
-        # Flag: normal <5.7%, prediabetes 5.7-6.4%, diabetes >=6.5%
-        if hba1c < 5.7:
-            flag, status = "N", "Normal"
-        elif hba1c < 6.5:
-            flag, status = "H", "Borderline (Pre-diabetic)"
-        else:
-            flag, status = "H", "High (Diabetic range)"
-
-        result["parameters"].append({
-            "param":   "HBA1C",
-            "name":    "Glycated Hemoglobin (HbA1c)",
-            "value":   hba1c,
-            "unit":    "%",
-            "ref_min": 4.0,
-            "ref_max": 5.6,
-            "flag":    flag,
-            "status":  status,
-        })
-
-    return result
-
-
 def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = None) -> dict:
     """
     Route to the correct parser.
@@ -488,8 +469,6 @@ def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = Non
             return parse_xl200(text)
         if p in ("erba_h560", "hl7"):
             return parse_hl7(text)
-        if p in ("gh900", "lifotronic_gh900"):
-            return parse_gh900(text)
         # Unknown parser string — fall through to auto-detect below
 
     # ── Auto-detect fallback ──────────────────────────────────
