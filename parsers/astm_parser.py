@@ -377,6 +377,88 @@ def parse_xl200(raw_text: str) -> dict:
     return result
 
 
+def parse_gh900(raw_text: str) -> dict:
+    """
+    Parse Lifotronic GH-900 HbA1c Analyser proprietary format.
+
+    The GH-900 sends a binary-ish stream (no standard ASTM records):
+      S06----<NN><BARCODE><DIGITS><ABSORPTION_STREAM>
+
+    Where:
+      - <NN>               : 2-digit sample counter (e.g. 11 = sample 11)
+      - <BARCODE>          : alphanumeric patient barcode (e.g. HC805072RET)
+      - <DIGITS>           : fixed header block (date/time/reagent info), 9+ digits
+      - <ABSORPTION_STREAM>: 200+ chromatogram absorption values encoded as
+                             6-char fixed-width fields concatenated with a leading '.'
+                             e.g. ".00140.00290...8.2490..."
+
+    The HbA1c result is at index 11 (0-based) of the absorption stream,
+    which matches the machine's screen display (e.g. 8.249 → 8.2%).
+
+    QC samples (Type D on screen) have barcodes like QC1, QC2 and are
+    filtered upstream by save_result() via QC_PREFIXES.
+    """
+    import re as _re
+    result = {
+        "protocol":    "GH900",
+        "device_type": "HbA1c",
+        "parsed_at":   datetime.now().isoformat(),
+        "patient_id":  None,
+        "barcode":     None,
+        "parameters":  [],
+    }
+
+    text = raw_text.strip()
+
+    # Extract barcode and absorption stream
+    # Pattern: S + digits + dashes + digits + barcode + 9+ digit block + absorption
+    m = _re.match(r'S\d+\-+\d+([A-Za-z0-9]+?)(\d{9,})(.*)', text, _re.DOTALL)
+    if not m:
+        return result
+
+    barcode     = m.group(1).strip()
+    absorption_raw = m.group(3)  # starts with '.'
+
+    result["barcode"] = barcode if barcode else None
+
+    # Parse 6-char fixed-width absorption fields
+    # The stream starts with '.' so prepend '0' → '0.XXXX'
+    absorption_fixed = "0" + absorption_raw
+    chunks = [absorption_fixed[i:i+6] for i in range(0, len(absorption_fixed), 6)]
+
+    values = []
+    for chunk in chunks:
+        try:
+            values.append(float(chunk))
+        except ValueError:
+            pass
+
+    # HbA1c result is at absorption index 11
+    HBAIC_INDEX = 11
+    if len(values) > HBAIC_INDEX:
+        hba1c = round(values[HBAIC_INDEX], 2)
+        # Flag: normal <5.7%, prediabetes 5.7-6.4%, diabetes >=6.5%
+        if hba1c < 5.7:
+            flag, status = "N", "Normal"
+        elif hba1c < 6.5:
+            flag, status = "H", "Borderline (Pre-diabetic)"
+        else:
+            flag, status = "H", "High (Diabetic range)"
+
+        result["parameters"].append({
+            "param":   "HBA1C",
+            "name":    "Glycated Hemoglobin (HbA1c)",
+            "value":   hba1c,
+            "unit":    "%",
+            "ref_min": 4.0,
+            "ref_max": 5.6,
+            "flag":    flag,
+            "status":  status,
+        })
+
+    return result
+
+
 def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = None) -> dict:
     """
     Route to the correct parser.
@@ -406,6 +488,8 @@ def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = Non
             return parse_xl200(text)
         if p in ("erba_h560", "hl7"):
             return parse_hl7(text)
+        if p in ("gh900", "lifotronic_gh900"):
+            return parse_gh900(text)
         # Unknown parser string — fall through to auto-detect below
 
     # ── Auto-detect fallback ──────────────────────────────────

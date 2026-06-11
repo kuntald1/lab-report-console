@@ -516,22 +516,61 @@ def handle_gh900_connection(sock, device_id, device_type):
     ETX = b'\x03'
     STX = b'\x02'
 
-    try:
-        add_log(device_id, "🔌 GH-900 connected — waiting for ENQ (no idle timeout)...", "info")
+    # Idle timeout: after last ETX, if no byte arrives within this many seconds,
+    # treat it as end of transmission and save the buffered result.
+    IDLE_TIMEOUT = 5  # seconds
 
-        # No timeout — keep the connection alive until machine disconnects
-        sock.settimeout(None)  # blocking forever — machine drives the timing
+    def _save_buffer(buf):
+        """Clean and save a raw_bytes buffer. Returns True if data was saved."""
+        if not buf:
+            return False
+        cleaned = (buf
+                   .replace(STX, b"")
+                   .replace(ETX, b"")
+                   .replace(ENQ, b"")
+                   .replace(ACK, b""))
+        raw = cleaned.decode("ascii", errors="ignore").strip()
+        if raw:
+            add_log(device_id, f"📥 Saving {len(raw)} bytes (ASTM)...", "info")
+            save_result(device_id, raw, device_type)
+            add_log(device_id, "⏳ Ready for next upload...", "info")
+            return True
+        else:
+            add_log(device_id, f"⚠️ No parseable ASCII — hex={buf.hex()}", "warn")
+            return False
+
+    try:
+        add_log(device_id, "🔌 GH-900 connected — waiting for data (idle timeout=5s after ETX)...", "info")
 
         raw_bytes = b""
+        waiting_for_more = False  # True after first ETX, enables idle timeout
 
         while True:
             with device_lock:
                 if not device_states.get(device_id, {}).get("running"):
                     break
 
-            chunk = sock.recv(1)  # read 1 byte at a time for precise ENQ detection
+            # Use idle timeout only after we've received at least one ETX frame
+            timeout = IDLE_TIMEOUT if waiting_for_more else None
+            sock.settimeout(timeout)
+
+            try:
+                chunk = sock.recv(1)
+            except socket.timeout:
+                # No data for IDLE_TIMEOUT seconds after last ETX → save and reset
+                add_log(device_id, f"⏱️ Idle timeout after {IDLE_TIMEOUT}s — saving result...", "info")
+                _save_buffer(raw_bytes)
+                raw_bytes = b""
+                waiting_for_more = False
+                sock.settimeout(None)  # back to blocking
+                continue
+
             if not chunk:
                 add_log(device_id, "⚠️ GH-900 disconnected", "warn")
+                # Save any buffered data on disconnect
+                if raw_bytes:
+                    add_log(device_id, "📦 Saving buffered data on disconnect...", "warn")
+                    _save_buffer(raw_bytes)
                 break
 
             # Log every byte received
@@ -540,44 +579,37 @@ def handle_gh900_connection(sock, device_id, device_type):
                 "info")
 
             if chunk == ENQ:
-                # Machine wants to send — reply ACK immediately
+                # Machine wants to send — if we have buffered data from a previous
+                # transmission, save it first before resetting
+                if raw_bytes:
+                    add_log(device_id, "📦 ENQ received with buffered data — saving previous result...", "info")
+                    _save_buffer(raw_bytes)
+                    raw_bytes = b""
                 sock.send(ACK)
                 add_log(device_id, "↩️ ENQ → ACK sent — receiving frames...", "info")
-                raw_bytes = b""  # reset buffer for this transmission
+                waiting_for_more = False
                 continue
 
             if chunk == EOT:
-                # End of transmission — process result
+                # Explicit end of transmission — process result
                 add_log(device_id, "✅ EOT received — processing result...", "info")
                 if raw_bytes:
-                    cleaned = (raw_bytes
-                               .replace(STX, b"")
-                               .replace(ETX, b"")
-                               .replace(ENQ, b"")
-                               .replace(ACK, b""))
-                    raw = cleaned.decode("ascii", errors="ignore").strip()
                     add_log(device_id,
-                        f"📦 Full transmission: {len(raw_bytes)}B | text={repr(raw[:100])}",
-                        "info")
-                    if raw:
-                        add_log(device_id,
-                            f"📥 Received {len(raw)} bytes (ASTM) — processing...", "info")
-                        save_result(device_id, raw, device_type)
-                        add_log(device_id, "⏳ Ready for next upload...", "info")
-                    else:
-                        add_log(device_id,
-                            f"⚠️ EOT but no parseable ASCII — hex={raw_bytes.hex()}", "warn")
+                        f"📦 Full transmission: {len(raw_bytes)}B", "info")
+                    _save_buffer(raw_bytes)
                     raw_bytes = b""
+                waiting_for_more = False
                 continue
 
             if chunk == ETX:
-                # End of a data frame — ACK it
+                # End of a data frame — ACK it and start idle timer
                 raw_bytes += chunk
                 try:
                     sock.send(ACK)
                     add_log(device_id, "↩️ ETX → ACK sent", "info")
                 except Exception:
                     pass
+                waiting_for_more = True  # start idle timeout from now
                 continue
 
             # Regular data byte — accumulate
