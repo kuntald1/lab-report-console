@@ -491,6 +491,87 @@ def handle_h560_connection(sock, device_id, device_type):
         add_log(device_id, f"❌ H560 error: {e}", "error")
 
 
+def handle_xn330_connection(sock, device_id, device_type):
+    """
+    Sysmex XN330 Hematology Analyser — ASTM passive listen handler.
+    ────────────────────────────────────────────────────────────────
+    Protocol (machine-initiated ASTM):
+      Machine sends ENQ  -> MediCloud sends ACK
+      Machine sends STX frames (H/P/O/R/L, CR-terminated) -> MediCloud ACKs each ETX
+      Machine sends EOT  -> MediCloud saves result
+
+    XN330 also sends ENQ->EOT keepalive pings every ~60s (no data).
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    STX = b'\x02'
+    ETX = b'\x03'
+
+    try:
+        add_log(device_id, "🔌 XN330 connected — listening for ENQ...", "info")
+        sock.settimeout(None)
+
+        raw_bytes = b""
+
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            chunk = sock.recv(1)
+            if not chunk:
+                add_log(device_id, "⚠️ XN330 disconnected", "warn")
+                break
+
+            add_log(device_id,
+                f"📨 XN330 byte: hex={chunk.hex()} repr={repr(chunk)}", "info")
+
+            if chunk == ENQ:
+                sock.send(ACK)
+                add_log(device_id, "↩️ ENQ → ACK sent — receiving frames...", "info")
+                raw_bytes = b""
+                continue
+
+            if chunk == EOT:
+                if raw_bytes:
+                    add_log(device_id, "✅ EOT received — processing result...", "info")
+                    cleaned = (raw_bytes
+                               .replace(STX, b"")
+                               .replace(ETX, b"")
+                               .replace(ENQ, b"")
+                               .replace(ACK, b""))
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    if raw:
+                        add_log(device_id, f"📥 {len(raw)} bytes — processing...", "info")
+                        add_log(device_id, f"📄 Preview: {repr(raw[:120])}", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next result...", "info")
+                    raw_bytes = b""
+                else:
+                    add_log(device_id, "💓 Keepalive ping — ready", "info")
+                continue
+
+            if chunk == ETX:
+                raw_bytes += chunk
+                try:
+                    sock.send(ACK)
+                    add_log(device_id, "↩️ ETX → ACK sent", "info")
+                except Exception:
+                    pass
+                continue
+
+            raw_bytes += chunk
+
+    except Exception as e:
+        add_log(device_id, f"❌ XN330 error: {e}", "error")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def handle_maglumi_connection(sock, device_id, device_type):
     """
     Snibe Maglumi X3 — Passive listen mode.
@@ -958,9 +1039,17 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                     ).start()
                     continue  # Don't close conn — thread owns it
                 elif port == 5003:
-                    # Maglumi X3: temporary raw byte logger
+                    # Maglumi X3: passive ASTM listen
                     threading.Thread(
                         target=handle_maglumi_connection,
+                        args=(conn, device_id, device_type),
+                        daemon=True
+                    ).start()
+                    continue  # Don't close conn — thread owns it
+                elif port == 5002:
+                    # Sysmex XN330: passive ASTM listen with ENQ/ACK
+                    threading.Thread(
+                        target=handle_xn330_connection,
                         args=(conn, device_id, device_type),
                         daemon=True
                     ).start()
