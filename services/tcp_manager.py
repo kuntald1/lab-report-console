@@ -491,6 +491,89 @@ def handle_h560_connection(sock, device_id, device_type):
         add_log(device_id, f"❌ H560 error: {e}", "error")
 
 
+def handle_maglumi_connection(sock, device_id, device_type):
+    """
+    Snibe Maglumi X3 — Passive listen mode.
+    Machine connects and initiates uploads itself (Auto Upload or →LIS Online).
+
+    Protocol (machine-initiated ASTM):
+      Machine → ENQ          : ready to send
+      MediCloud → ACK        : go ahead
+      Machine → STX frames   : ASTM H/P/O/R/L records (CR-terminated inside frames)
+      MediCloud → ACK each ETX
+      Machine → EOT          : end of transmission → save result
+
+    Key: preserve CR bytes as record separators in raw_bytes so parse_astm()
+    can split records correctly. Do NOT replace CR with newline here.
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    STX = b'\x02'
+    ETX = b'\x03'
+
+    try:
+        add_log(device_id, "🔌 Maglumi X3 connected — listening for data...", "info")
+        sock.settimeout(None)  # block forever — machine drives timing
+
+        raw_bytes = b""
+
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            chunk = sock.recv(1)
+            if not chunk:
+                add_log(device_id, "⚠️ Maglumi disconnected", "warn")
+                break
+
+            add_log(device_id,
+                f"📨 Maglumi byte: hex={chunk.hex()} repr={repr(chunk)}", "info")
+
+            if chunk == ENQ:
+                sock.send(ACK)
+                add_log(device_id, "↩️ ENQ → ACK sent — receiving frames...", "info")
+                raw_bytes = b""
+                continue
+
+            if chunk == EOT:
+                add_log(device_id, "✅ EOT received — processing result...", "info")
+                if raw_bytes:
+                    # Strip only framing bytes — keep CR as record separator
+                    cleaned = (raw_bytes
+                               .replace(STX, b"")
+                               .replace(ETX, b"")
+                               .replace(ENQ, b"")
+                               .replace(ACK, b""))
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    if raw:
+                        add_log(device_id, f"📥 {len(raw)} bytes — processing...", "info")
+                        add_log(device_id, f"📄 Raw preview: {repr(raw[:120])}", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next upload...", "info")
+                    raw_bytes = b""
+                continue
+
+            if chunk == ETX:
+                raw_bytes += chunk
+                try:
+                    sock.send(ACK)
+                    add_log(device_id, "↩️ ETX → ACK sent", "info")
+                except Exception:
+                    pass
+                continue
+
+            # Accumulate all bytes including CR (record separator) and LF
+            raw_bytes += chunk
+
+    except Exception as e:
+        add_log(device_id, f"❌ Maglumi error: {e}", "error")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 def handle_gh900_connection(sock, device_id, device_type):
     """
     Lifotronic GH-900 HbA1c Analyser — persistent ENQ/ACK handler.
@@ -870,6 +953,14 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                     # GH-900: run in thread so new connections can be accepted
                     threading.Thread(
                         target=handle_gh900_connection,
+                        args=(conn, device_id, device_type),
+                        daemon=True
+                    ).start()
+                    continue  # Don't close conn — thread owns it
+                elif port == 5003:
+                    # Maglumi X3: temporary raw byte logger
+                    threading.Thread(
+                        target=handle_maglumi_connection,
                         args=(conn, device_id, device_type),
                         daemon=True
                     ).start()
