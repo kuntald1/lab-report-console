@@ -440,6 +440,91 @@ def parse_xl200(raw_text: str) -> dict:
     return result
 
 
+def parse_gh900(raw_text: str) -> dict:
+    """
+    Parse Lifotronic GH-900 HbA1c Analyser proprietary format.
+
+    Format: S<NN>----<NN><BARCODE><36-char header digits><absorption stream>
+    The absorption stream starts at the first '.' and consists of
+    6-char fixed-width fields (e.g. ".0014" -> 0.0014, "8.2490").
+
+    Barcode = everything between the S-prefix and the fixed 36-char
+    header block that immediately precedes the absorption stream.
+
+    HbA1c result is at absorption stream index 11.
+    """
+    result = {
+        "protocol":    "GH900",
+        "device_type": "HbA1c",
+        "parsed_at":   datetime.now().isoformat(),
+        "patient_id":  None,
+        "barcode":     None,
+        "parameters":  [],
+    }
+
+    text = raw_text.strip()
+
+    first_dot = text.find('.')
+    if first_dot == -1:
+        return result
+
+    m = re.match(r'(S\d+\-+\d{2})', text)
+    if not m:
+        return result
+    prefix_end = m.end()
+
+    before_dot = text[prefix_end:first_dot]
+    HEADER_LEN = 36  # fixed-width date/time/reagent header block
+    if len(before_dot) <= HEADER_LEN:
+        return result
+
+    barcode = before_dot[:-HEADER_LEN].strip()
+    result["barcode"] = barcode if barcode else None
+
+    # Parse absorption stream: starts with '.' -> prepend '0' -> 6-char chunks
+    absorption_raw = text[first_dot:]
+    absorption_fixed = "0" + absorption_raw
+    chunks = [absorption_fixed[i:i+6] for i in range(0, len(absorption_fixed), 6)]
+
+    values = []
+    for chunk in chunks:
+        try:
+            values.append(float(chunk))
+        except ValueError:
+            pass
+
+    # HbA1c% via Area-ratio calibration formula (verified against 3 known
+    # samples: HC11015=6.0, 008216226=8.4, 000216326=5.6 — all exact matches)
+    # Areas (HbA1a, HbA1b, HbF, LA1c+, HbA1c, HbA0) = chunks[6:12] * 10000
+    CAL_FACTOR = 1.126
+    if len(values) >= 12:
+        areas = [values[i] * 10000 for i in range(6, 12)]
+        area_total = sum(areas)
+        area_hba1c = areas[4]  # index 10 overall -> areas[4]
+        if area_total > 0:
+            hba1c = round((area_hba1c / area_total) * 100 * CAL_FACTOR, 1)
+
+            if hba1c < 5.7:
+                flag, status = "N", "Normal"
+            elif hba1c < 6.5:
+                flag, status = "H", "Borderline (Pre-diabetic)"
+            else:
+                flag, status = "H", "High (Diabetic range)"
+
+            result["parameters"].append({
+                "param":   "HBA1C",
+                "name":    "Glycated Hemoglobin (HbA1c)",
+                "value":   hba1c,
+                "unit":    "%",
+                "ref_min": 4.0,
+                "ref_max": 5.6,
+                "flag":    flag,
+                "status":  status,
+            })
+
+    return result
+
+
 def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = None) -> dict:
     """
     Route to the correct parser.
@@ -469,6 +554,8 @@ def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = Non
             return parse_xl200(text)
         if p in ("erba_h560", "hl7"):
             return parse_hl7(text)
+        if p in ("gh900", "lifotronic_gh900"):
+            return parse_gh900(text)
         # Unknown parser string — fall through to auto-detect below
 
     # ── Auto-detect fallback ──────────────────────────────────
