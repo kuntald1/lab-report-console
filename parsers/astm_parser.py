@@ -522,6 +522,25 @@ def parse_gh900(raw_text: str) -> dict:
                 "status":  status,
             })
 
+            # HbA0% via Area-ratio (k=1.0, verified exact on 2 known samples)
+            area_hba0 = areas[5]
+            hba0_pct = round((area_hba0 / area_total) * 100, 1)
+
+            # IFCC (mmol/mol) derived from NGSP using the standard
+            # IFCC<->NGSP relationship: NGSP = 0.0915*IFCC + 2.15
+            ifcc = round((hba1c - 2.15) / 0.0915, 1)
+
+            result["gh900_info"] = {
+                "ngsp":       hba1c,
+                "ifcc":       ifcc,
+                "area_total": round(area_total, 1),
+                "hba0_pct":   hba0_pct,
+            }
+
+            # Chromatogram curve: remaining absorption values after the
+            # area/result block (index 18 onward), used for plotting
+            result["chromatogram"] = values[18:]
+
     return result
 
 
