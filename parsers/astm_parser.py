@@ -537,9 +537,25 @@ def parse_gh900(raw_text: str) -> dict:
                 "hba0_pct":   hba0_pct,
             }
 
-            # Chromatogram curve: remaining absorption values after the
-            # area/result block (index 18 onward), used for plotting
-            result["chromatogram"] = values[18:]
+            # Chromatogram curve: the absorbance trace is the LONGEST run of
+            # consecutive 0.XXXX (4-decimal, <1.0) tokens in the stream. This
+            # is robust to the variable-width summary block (e.g. 53.10, 8.61,
+            # 54.52) that precedes it — that block's odd length would otherwise
+            # knock fixed-width 6-char chunking out of alignment and mangle the
+            # curve. The areas/heights are also 0.XXXX but form only short runs
+            # that the summary block separates from the main trace.
+            chromo_matches = list(re.finditer(r'0\.\d{4}', absorption_raw))
+            runs, cur = [], []
+            for mt in chromo_matches:
+                if cur and mt.start() != cur[-1].end():
+                    runs.append(cur)
+                    cur = []
+                cur.append(mt)
+            if cur:
+                runs.append(cur)
+            if runs:
+                longest = max(runs, key=len)
+                result["chromatogram"] = [float(mt.group()) for mt in longest]
 
     return result
 
