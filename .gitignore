@@ -33,3 +33,4 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+gh900_raw*.txt
