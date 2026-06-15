@@ -568,7 +568,21 @@ def auto_parse(raw_text: str, device_type: str = "Hematology", parser: str = Non
         if p == "erba_ec90":
             return parse_erba_ec90(text)
         if p in ("erba_em200", "astm"):
-            return parse_astm(text, device_type)
+            astm_result = parse_astm(text, device_type)
+            # EC90 sends two formats: R|-record (handled above) and
+            # OBR/OBX electrolyte panels (Na/K/Cl). If parse_astm found
+            # nothing AND this looks like an OBR/OBX frame, retry with
+            # the dedicated EC90 parser before giving up.
+            if not astm_result.get("parameters"):
+                has_standard_o = any(
+                    line.lstrip().startswith("O|") or "|O|" in line
+                    for line in text.replace("\r", "\n").split("\n")
+                )
+                if "OBX" in text and "OBR" in text and not has_standard_o:
+                    ec90_result = parse_erba_ec90(text)
+                    if ec90_result.get("parameters"):
+                        return ec90_result
+            return astm_result
         if p == "erba_xl200":
             return parse_xl200(text)
         if p in ("erba_h560", "hl7"):
