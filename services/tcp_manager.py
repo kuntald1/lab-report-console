@@ -13,6 +13,7 @@ import socket
 import threading
 import time
 import datetime
+from sqlalchemy import text
 from database import SessionLocal
 from models.models import LabResult, Patient, Device as DeviceModel
 from parsers.astm_parser import auto_parse
@@ -198,6 +199,47 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
         db.add(result)
         db.commit()
         rid = result.id
+
+        # ── Accession-number resolution (raw SQL — this app has no BillItem model,
+        # and its own LabResult class has no accession_number column, but the shared
+        # production DB's lab_results table does; UPDATE by column name reaches it
+        # directly without needing either of those additions here). Mirrors the web
+        # backend's services/accession.py: the scanned code might be a specific
+        # accession number (e.g. HC58922A) already, or the patient's plain barcode
+        # (in which case we take that patient's most recent billed accession). ──
+        try:
+            resolved_accession = None
+            resolved_patient_id = patient.id if patient else None
+
+            row = db.execute(text("""
+                SELECT bi.accession_number, b.patient_id
+                FROM bill_items bi JOIN bills b ON b.id = bi.bill_id
+                WHERE bi.accession_number = :code
+                ORDER BY bi.id DESC LIMIT 1
+            """), {"code": barcode}).fetchone()
+
+            if row:
+                resolved_accession, resolved_patient_id = row[0], row[1]
+            elif patient:
+                row2 = db.execute(text("""
+                    SELECT bi.accession_number
+                    FROM bill_items bi JOIN bills b ON b.id = bi.bill_id
+                    WHERE b.patient_id = :pid AND bi.accession_number IS NOT NULL
+                    ORDER BY bi.id DESC LIMIT 1
+                """), {"pid": patient.id}).fetchone()
+                if row2:
+                    resolved_accession = row2[0]
+
+            if resolved_accession:
+                db.execute(text("UPDATE lab_results SET accession_number = :acc WHERE id = :id"),
+                           {"acc": resolved_accession, "id": rid})
+            if resolved_patient_id and resolved_patient_id != (patient.id if patient else None):
+                db.execute(text("UPDATE lab_results SET patient_id = :pid WHERE id = :id"),
+                           {"pid": resolved_patient_id, "id": rid})
+            db.commit()
+        except Exception:
+            db.rollback()   # never let accession resolution break real result ingestion
+
         patient_name = patient.patient_name if patient else None  # Capture BEFORE db.close()
         db.close()
 
