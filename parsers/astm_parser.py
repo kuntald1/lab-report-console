@@ -43,6 +43,56 @@ def get_flag(param: str, value: float) -> str:
     return "N"
 
 
+_RANGE_RE = re.compile(
+    r"^\s*(-?\d+(?:\.\d+)?)\s*(?:-|\u2013|\u2014|to|~|\.\.|\^)\s*(-?\d+(?:\.\d+)?)\s*$",
+    re.IGNORECASE)
+_ONE_SIDED_RE = re.compile(r"^\s*([<>])\s*=?\s*(-?\d+(?:\.\d+)?)\s*$")
+
+
+def parse_ref_range(raw: str):
+    """Machine-sent reference range -> (min, max), either side possibly "".
+
+    Handles the forms analysers actually send in ASTM field 6:
+      "0.3 - 4.5"  "0.3-4.5"  "0.3 to 4.5"  "0.3^4.5"  "< 5"  "> 10"
+    Anything it can't read confidently comes back ("", "") so the caller
+    falls back to the built-in table rather than printing a wrong range.
+    """
+    if not raw:
+        return "", ""
+    txt = raw.strip()
+    m = _RANGE_RE.match(txt)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+    m = _ONE_SIDED_RE.match(txt)
+    if m:
+        return ("", float(m.group(2))) if m.group(1) == "<" else (float(m.group(2)), "")
+    return "", ""
+
+
+def normalise_flag(raw: str, value, ref_min, ref_max, param: str) -> str:
+    """Machine-sent abnormal flag -> the H / L / N the web app understands.
+
+    A directional flag from the machine wins. Otherwise ("A" for a bare
+    "abnormal", "N", or nothing at all) the value is compared against
+    whichever range we have, and only with no range at all do we fall
+    back to the built-in table — i.e. exactly the old behaviour.
+    """
+    f = (raw or "").strip().upper()
+    if f in ("H", "HH", "H*", ">", "A>"):
+        return "H"
+    if f in ("L", "LL", "L*", "<", "A<"):
+        return "L"
+    lo_ok = isinstance(ref_min, (int, float))
+    hi_ok = isinstance(ref_max, (int, float))
+    if isinstance(value, (int, float)) and (lo_ok or hi_ok):
+        if lo_ok and value < ref_min:
+            return "L"
+        if hi_ok and value > ref_max:
+            return "H"
+        return "N"
+    return get_flag(param, value) if isinstance(value, (int, float)) else "N"
+
+
 def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
     """
     Parse ASTM LIS2-A2 formatted text into clean JSON.
@@ -100,6 +150,10 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
                 test_raw  = parts[2] if len(parts) > 2 else ""
                 value_raw = (parts[3] if len(parts) > 3 else "").strip()
                 unit_raw  = parts[4] if len(parts) > 4 else ""
+                # ASTM LIS2-A2 field 6 = reference range, field 7 = abnormal flag.
+                # e.g. R|1|^^^TSH II|6.11|uIU/mL|0.3 - 4.5|H
+                range_raw = (parts[5] if len(parts) > 5 else "").strip()
+                flag_raw  = (parts[6] if len(parts) > 6 else "").strip()
 
                 # Extract param name: ^^^^WBC^1 -> WBC (strip ^ and trailing ^N digit)
                 param = re.sub(r"[\^]+", "", test_raw).strip()
@@ -173,15 +227,21 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
                     continue  # Skip non-numeric values (e.g. PNG refs)
 
                 ref  = REFERENCE_RANGES.get(param, {})
-                flag = get_flag(param, value)
+                # The machine knows its own assay's range; the table here only
+                # covers a handful of common tests, so trust the machine first
+                # and fall back to the table when it sends nothing readable.
+                ref_min, ref_max = parse_ref_range(range_raw)
+                if ref_min == "" and ref_max == "":
+                    ref_min, ref_max = ref.get("min", ""), ref.get("max", "")
+                flag = normalise_flag(flag_raw, value, ref_min, ref_max, param)
 
                 result["parameters"].append({
                     "param":   param,
                     "name":    param,
                     "value":   value,
                     "unit":    unit_raw or ref.get("unit", ""),
-                    "ref_min": ref.get("min", ""),
-                    "ref_max": ref.get("max", ""),
+                    "ref_min": ref_min,
+                    "ref_max": ref_max,
                     "flag":    flag,
                     "status":  "Normal" if flag == "N" else ("High" if flag == "H" else "Low"),
                 })
