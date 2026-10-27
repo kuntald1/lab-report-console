@@ -236,6 +236,16 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
             if resolved_patient_id and resolved_patient_id != (patient.id if patient else None):
                 db.execute(text("UPDATE lab_results SET patient_id = :pid WHERE id = :id"),
                            {"pid": resolved_patient_id, "id": rid})
+            # The web app's Results page only lists rows whose tenant_id / branch_id match the
+            # logged-in user, and this app's own LabResult insert leaves both empty — so copy
+            # them from the patient, otherwise the result is saved but never shows up there.
+            if resolved_patient_id:
+                db.execute(text("""
+                    UPDATE lab_results lr
+                    SET tenant_id = p.tenant_id, branch_id = p.branch_id
+                    FROM patients p
+                    WHERE p.id = :pid AND lr.id = :id
+                """), {"pid": resolved_patient_id, "id": rid})
             db.commit()
         except Exception:
             db.rollback()   # never let accession resolution break real result ingestion
