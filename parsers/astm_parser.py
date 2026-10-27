@@ -143,7 +143,14 @@ def parse_astm(raw_text: str, device_type: str = "Hematology") -> dict:
             elif len(parts) > 2 and parts[2].strip():
                 barcode_raw = parts[2]
             if barcode_raw:
-                result["barcode"] = barcode_raw.replace("^", "").strip()
+                # The specimen-ID field is ^-delimited: the ID itself, then any
+                # modifier the machine tacks on. The Sysmex XN-330 sends
+                # "^^      0930^M" — 0930 is the sample number and M is its
+                # analysis mode, so stripping every ^ glued them into "0930M".
+                # Take the first component that holds anything; an ID sent as
+                # one piece (XL200 "1945S", EM200 "HC28956") is unaffected.
+                result["barcode"] = next(
+                    (c for c in (x.strip() for x in barcode_raw.split("^")) if c), "")
 
         elif record_type == "R":
             if len(parts) >= 4:
