@@ -209,6 +209,7 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
         # (in which case we take that patient's most recent billed accession). ──
         try:
             resolved_accession = None
+            resolved_name = None
             resolved_patient_id = patient.id if patient else None
 
             row = db.execute(text("""
@@ -246,11 +247,15 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
                     FROM patients p
                     WHERE p.id = :pid AND lr.id = :id
                 """), {"pid": resolved_patient_id, "id": rid})
+                nm = db.execute(text("SELECT patient_name FROM patients WHERE id = :pid"),
+                                {"pid": resolved_patient_id}).fetchone()
+                resolved_name = nm[0] if nm else None
             db.commit()
         except Exception:
             db.rollback()   # never let accession resolution break real result ingestion
 
-        patient_name = patient.patient_name if patient else None  # Capture BEFORE db.close()
+        # a patient found by barcode OR by accession number both count as found
+        patient_name = (patient.patient_name if patient else None) or resolved_name  # Capture BEFORE db.close()
         db.close()
 
         with device_lock:
