@@ -20,6 +20,27 @@ REFERENCE_RANGES = {
     "MCV":  {"min": 80.0, "max": 100.0, "unit": "fL",       "name": "Mean Corpuscular Volume"},
     "MCH":  {"min": 27.0, "max": 33.0,  "unit": "pg",       "name": "Mean Corpuscular Hemoglobin"},
     "MCHC": {"min": 32.0, "max": 36.0,  "unit": "g/dL",    "name": "MCHC"},
+    # Differential — percentages
+    "NEUT%":  {"min": 40.0, "max": 75.0,  "unit": "%", "name": "Neutrophils %"},
+    "LYMPH%": {"min": 20.0, "max": 50.0,  "unit": "%", "name": "Lymphocytes %"},
+    "MONO%":  {"min": 2.0,  "max": 10.0,  "unit": "%", "name": "Monocytes %"},
+    "EO%":    {"min": 1.0,  "max": 6.0,   "unit": "%", "name": "Eosinophils %"},
+    "BASO%":  {"min": 0.0,  "max": 1.0,   "unit": "%", "name": "Basophils %"},
+    "IG%":    {"min": 0.0,  "max": 0.6,   "unit": "%", "name": "Immature Granulocytes %"},
+    # Differential — absolute counts
+    "NEUT#":  {"min": 2.0,  "max": 7.0,   "unit": "10³/µL", "name": "Neutrophils (Absolute)"},
+    "LYMPH#": {"min": 1.0,  "max": 3.0,   "unit": "10³/µL", "name": "Lymphocytes (Absolute)"},
+    "MONO#":  {"min": 0.2,  "max": 1.0,   "unit": "10³/µL", "name": "Monocytes (Absolute)"},
+    "EO#":    {"min": 0.02, "max": 0.5,   "unit": "10³/µL", "name": "Eosinophils (Absolute)"},
+    "BASO#":  {"min": 0.0,  "max": 0.1,   "unit": "10³/µL", "name": "Basophils (Absolute)"},
+    "IG#":    {"min": 0.0,  "max": 0.03,  "unit": "10³/µL", "name": "Immature Granulocytes (Absolute)"},
+    # Red-cell and platelet indices
+    "RDW-SD": {"min": 37.0, "max": 54.0,  "unit": "fL", "name": "RDW-SD"},
+    "RDW-CV": {"min": 11.5, "max": 14.5,  "unit": "%",  "name": "RDW-CV"},
+    "PDW":    {"min": 9.0,  "max": 17.0,  "unit": "fL", "name": "Platelet Distribution Width"},
+    "MPV":    {"min": 9.0,  "max": 13.0,  "unit": "fL", "name": "Mean Platelet Volume"},
+    "P-LCR":  {"min": 13.0, "max": 43.0,  "unit": "%",  "name": "Platelet Large Cell Ratio"},
+    "PCT":    {"min": 0.17, "max": 0.35,  "unit": "%",  "name": "Plateletcrit"},
     # Biochemistry
     "GLU":  {"min": 70,   "max": 110,   "unit": "mg/dL",   "name": "Glucose"},
     "CREA": {"min": 0.6,  "max": 1.2,   "unit": "mg/dL",   "name": "Creatinine"},
@@ -560,16 +581,38 @@ def parse_gh900(raw_text: str) -> dict:
         except ValueError:
             pass
 
-    # HbA1c% via Area-ratio calibration formula (verified against 3 known
-    # samples: HC11015=6.0, 008216226=8.4, 000216326=5.6 — all exact matches)
-    # Areas (HbA1a, HbA1b, HbF, LA1c+, HbA1c, HbA0) = chunks[6:12] * 10000
+    # The analyser reports the fractions it worked out itself, as six
+    # zero-padded NN.N fields immediately after the twelve 6-char area/height
+    # chunks: HbA1a, HbA1b, HbF, LA1c+, HbA1c, HbA0. Reading HbA1c from there
+    # is what keeps the report and the analyser's own screen in agreement.
+    #
+    # It used to be recalculated here from the peak areas with a factor fitted
+    # to three samples (HC11015=6.0, 008216226=8.4, 000216326=5.6). It matched
+    # those three and drifted elsewhere — 10.1 came out 10.0, 5.8 came out 6.0 —
+    # and 0.2 of HbA1c can move a patient across the 5.7 or 6.5 threshold. The
+    # formula is kept only as a fallback for a frame this block cannot read,
+    # so a malformed field costs a slightly-off number rather than no result.
+    SUMMARY_AT = 72              # 12 chunks x 6 chars
+    HBA1C_AT   = SUMMARY_AT + 16  # the 5th of the six NN.N fields
     CAL_FACTOR = 1.126
     if len(values) >= 12:
         areas = [values[i] * 10000 for i in range(6, 12)]
         area_total = sum(areas)
         area_hba1c = areas[4]  # index 10 overall -> areas[4]
         if area_total > 0:
-            hba1c = round((area_hba1c / area_total) * 100 * CAL_FACTOR, 1)
+            hba1c = None
+            reported = absorption_fixed[HBA1C_AT:HBA1C_AT + 4]
+            if re.fullmatch(r"\d{2}\.\d", reported):
+                as_float = float(reported)
+                # A plausible HbA1c only; anything outside it means the field
+                # was not where it was expected, so fall through to the formula.
+                if 2.0 <= as_float <= 25.0:
+                    hba1c = as_float
+            if hba1c is None:
+                hba1c = round((area_hba1c / area_total) * 100 * CAL_FACTOR, 1)
+                result["hba1c_source"] = "calculated"
+            else:
+                result["hba1c_source"] = "analyser"
 
             if hba1c < 5.7:
                 flag, status = "N", "Normal"
