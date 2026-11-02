@@ -9,6 +9,7 @@ Two connection modes:
   is_client = True  → Machine connects TO MediCloud (server/listen mode)
 """
 
+import errno
 import socket
 import threading
 import time
@@ -840,6 +841,100 @@ def handle_gh900_connection(sock, device_id, device_type):
         add_log(device_id, f"❌ GH-900 error: {e}", "error")
 
 
+def handle_ec90_connection(sock, device_id, device_type):
+    """
+    Erba EC 90 Electrolyte Analyser — passive ASTM listen handler.
+    ────────────────────────────────────────────────────────────────
+    Protocol (machine-initiated ASTM, same shape as XN330 / Maglumi):
+      Machine -> ENQ        : ready to send
+      MediCloud -> ACK      : go ahead
+      Machine -> STX frames : H/P/O/R/L records, CR-terminated
+      MediCloud -> ACK each ETX
+      Machine -> EOT        : end of transmission -> save result
+
+    Why this exists: port 6100 used to fall through to the generic
+    receive_astm() branch, which runs INSIDE the accept loop and blocks it
+    for up to 60s per connection. The EC 90 opens a fresh connection about
+    once a minute, so a connection carrying real results would sit unaccepted
+    in the backlog while the loop was still blocked on the previous, empty
+    one — the result never arrived and a 1-byte "UNKNOWN" row was saved
+    instead. Handled in its own thread, the accept loop stays free.
+    """
+    ENQ = b'\x05'
+    ACK = b'\x06'
+    EOT = b'\x04'
+    STX = b'\x02'
+    ETX = b'\x03'
+
+    # The EC 90 does not hold a connection open — it reconnects per
+    # transmission. A generous idle cap only stops dead threads piling up.
+    IDLE_TIMEOUT = 300
+
+    try:
+        add_log(device_id, "🔌 EC 90 connected — listening for ENQ...", "info")
+        sock.settimeout(IDLE_TIMEOUT)
+
+        raw_bytes = b""
+
+        while True:
+            with device_lock:
+                if not device_states.get(device_id, {}).get("running"):
+                    break
+
+            try:
+                chunk = sock.recv(1)
+            except socket.timeout:
+                add_log(device_id, f"⏰ EC 90 idle {IDLE_TIMEOUT}s — closing this connection", "info")
+                break
+
+            if not chunk:
+                add_log(device_id, "⚠️ EC 90 disconnected", "warn")
+                break
+
+            if chunk == ENQ:
+                sock.send(ACK)
+                add_log(device_id, "↩️ ENQ → ACK sent — receiving frames...", "info")
+                raw_bytes = b""
+                continue
+
+            if chunk == EOT:
+                if raw_bytes:
+                    add_log(device_id, "✅ EOT received — processing result...", "info")
+                    # Strip framing only — CR stays, it separates the records
+                    cleaned = (raw_bytes
+                               .replace(STX, b"")
+                               .replace(ETX, b"")
+                               .replace(ENQ, b"")
+                               .replace(ACK, b""))
+                    raw = cleaned.decode("ascii", errors="ignore").strip()
+                    if raw:
+                        add_log(device_id, f"📥 Received {len(raw)} bytes — processing...", "info")
+                        save_result(device_id, raw, device_type)
+                        add_log(device_id, "⏳ Ready for next sample...", "info")
+                    raw_bytes = b""
+                else:
+                    add_log(device_id, "💓 Keepalive ping — ready", "info")
+                continue
+
+            if chunk == ETX:
+                raw_bytes += chunk
+                try:
+                    sock.send(ACK)
+                except Exception:
+                    pass
+                continue
+
+            raw_bytes += chunk
+
+    except Exception as e:
+        add_log(device_id, f"❌ EC 90 error: {e}", "error")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def receive_astm(sock: socket.socket, timeout: int = 30) -> str:
     """
     Read ASTM data from socket with ENQ/ACK handshake support.
@@ -1064,6 +1159,26 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                     break
             try:
                 conn, addr = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError as e:
+                # Only a DEAD listening socket ends the loop. These three mean
+                # the socket itself is gone (Disconnect closed it, or a restart
+                # took the port), so accept() can only raise the same error
+                # again — looping on it floods the log with hundreds of
+                # identical "[Errno 9] Bad file descriptor" lines in a second.
+                # Everything else (a client that vanished mid-accept, a
+                # momentary resource limit) is transient, so keep listening
+                # exactly as before.
+                if e.errno in (errno.EBADF, errno.ENOTSOCK, errno.EINVAL):
+                    if device_states.get(device_id, {}).get("running"):
+                        add_log(device_id, f"❌ Listener closed ({e}) — stopping", "error")
+                    break
+                if device_states.get(device_id, {}).get("running"):
+                    add_log(device_id, f"⚠️ Accept failed ({e}) — still listening", "warn")
+                continue
+
+            try:
                 with device_lock:
                     if device_id in device_states:
                         device_states[device_id]["connected"] = True
@@ -1103,6 +1218,15 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                         daemon=True
                     ).start()
                     continue  # Don't close conn — thread owns it
+                elif port == 6100:
+                    # Erba EC 90: passive ASTM listen — threaded, so a connection
+                    # that carries no data never blocks the next one
+                    threading.Thread(
+                        target=handle_ec90_connection,
+                        args=(conn, device_id, device_type),
+                        daemon=True
+                    ).start()
+                    continue  # Don't close conn — thread owns it
                 elif port == 5002:
                     # Sysmex XN330: passive ASTM listen with ENQ/ACK
                     threading.Thread(
@@ -1125,8 +1249,6 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                         device_states[device_id]["connected"] = False
                 set_device_online(device_id, False)
 
-            except socket.timeout:
-                continue
             except Exception as e:
                 if device_states.get(device_id, {}).get("running"):
                     add_log(device_id, f"❌ Connection error: {e}", "error")
