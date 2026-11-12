@@ -54,17 +54,23 @@ def _default_state() -> dict:
     }
 
 
-def _is_duplicate(device_id: int, barcode: str) -> bool:
+def _is_duplicate(device_id: int, barcode: str, sig=None) -> bool:
     """
     Return True if this (device_id, barcode) was already saved
     within DEDUP_WINDOW seconds — i.e. it's a retransmit, skip it.
     If not a duplicate, record the timestamp and return False.
     Also prunes expired entries to keep the cache small.
+
+    `sig` identifies WHAT was sent (which parameters and values). Some analysers
+    (Maglumi X3) send each test of one sample as its own transmission with the
+    same barcode — TSH, TT3, TT4 within seconds — so the barcode alone would
+    wrongly drop the 2nd and 3rd. Same barcode AND same content = a retransmit;
+    same barcode with different content = a different test, keep it.
     """
     if not barcode or barcode == "UNKNOWN":
         return False  # never dedup unknown barcodes — might be different samples
 
-    key = (device_id, barcode)
+    key = (device_id, barcode, sig)
     now = time.monotonic()
 
     with _dedup_lock:
@@ -176,7 +182,9 @@ def save_result(device_id: int, raw_data: str, device_type: str = "Hematology"):
         # ─────────────────────────────────────────────────────
 
         # ── Deduplication ─────────────────────────────────────
-        if _is_duplicate(device_id, barcode):
+        sig = tuple(sorted((str(p.get("param") or p.get("name")), str(p.get("value")))
+                           for p in (parsed.get("parameters") or [])))
+        if _is_duplicate(device_id, barcode, sig):
             add_log(device_id,
                 f"⏭️ Duplicate skipped — Barcode: {barcode} already saved within {DEDUP_WINDOW}s",
                 "warn")
