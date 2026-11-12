@@ -347,7 +347,7 @@ def handle_em200_connection(sock: socket.socket, device_id: int, device_type: st
             add_log(device_id, "⚠️ No ACK in 10s — staying connected, waiting for data...", "warn")
 
         # Step 3: Loop forever — receive samples as they arrive
-        sock.settimeout(86400)  # 24 hour idle timeout — stay connected until machine disconnects
+        sock.settimeout(None)  # no idle timeout — stay connected until the machine disconnects
         while True:
             with device_lock:
                 if not device_states.get(device_id, {}).get("running"):
@@ -434,7 +434,7 @@ def handle_xl200_connection(sock: socket.socket, device_id: int, device_type: st
             add_log(device_id, "⚠️ No ACK in 10s — staying connected, waiting for data...", "warn")
 
         # Step 3: Loop — receive samples, send ENQ after each EOT
-        sock.settimeout(86400)  # 24h idle — stay connected
+        sock.settimeout(None)  # no idle timeout — stay connected
         while True:
             with device_lock:
                 if not device_states.get(device_id, {}).get("running"):
@@ -480,7 +480,7 @@ def handle_xl200_connection(sock: socket.socket, device_id: int, device_type: st
                     try:
                         sock.settimeout(5)
                         sock.send(ENQ)
-                        sock.settimeout(86400)
+                        sock.settimeout(None)
                     except Exception:
                         pass  # If send fails, machine will reconnect
 
@@ -498,8 +498,8 @@ def handle_h560_connection(sock, device_id, device_type):
     Completely separate from EM200, XL200, EC90 handlers.
     """
     try:
-        add_log(device_id, "🔌 H560 connected — listening for HL7 data (5min)...", "info")
-        sock.settimeout(300)  # 5 minutes — operator may click Comm. anytime
+        add_log(device_id, "🔌 H560 connected — listening for HL7 data...", "info")
+        sock.settimeout(None)  # no idle timeout — the machine opens this connection and may send at any time (Comm. click, auto-communication); closing it early leaves the H560 unable to send until it reconnects
         raw_bytes = b""
 
         while True:
@@ -542,7 +542,7 @@ def handle_h560_connection(sock, device_id, device_type):
                         pass
 
             except socket.timeout:
-                add_log(device_id, "⏰ H560 5min timeout — closing connection", "info")
+                add_log(device_id, "⏰ H560 idle timeout — closing connection", "info")
                 break
 
     except Exception as e:
@@ -868,7 +868,7 @@ def handle_ec90_connection(sock, device_id, device_type):
 
     # The EC 90 does not hold a connection open — it reconnects per
     # transmission. A generous idle cap only stops dead threads piling up.
-    IDLE_TIMEOUT = 300
+    IDLE_TIMEOUT = None   # unlimited; TCP keepalive (set on accept) reaps genuinely dead peers
 
     try:
         add_log(device_id, "🔌 EC 90 connected — listening for ENQ...", "info")
@@ -1179,6 +1179,9 @@ def server_thread_fn(device_id: int, port: int, device_type: str):
                 continue
 
             try:
+                # Keep the link open indefinitely, but let the OS notice a machine that
+                # vanished without closing (power cut, cable pulled) so its thread ends.
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 with device_lock:
                     if device_id in device_states:
                         device_states[device_id]["connected"] = True
